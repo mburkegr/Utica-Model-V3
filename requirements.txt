@@ -1,0 +1,8 @@
+streamlit
+pandas
+numpy
+matplotlib
+openpyxl
+pyxirr
+plotly>=6.1.1
+kaleido>=1.0.0
