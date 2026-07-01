@@ -419,33 +419,104 @@ def build_slot_financials(
     df = one_well_df.copy()
 
     gross_wells = float(slot["gross_wells"])
-    net_wells = float(slot["net_wells_calc"])
+    base_working_interest = float(slot["working_interest"])
+    base_net_wells = float(slot["net_wells_calc"])
+    lease_nri = float(slot["net_revenue_interest"])
+
+    # We fund D&C at our original WI, then surrender a portion of
+    # our original WI beginning with first production.
+    carry_enabled = bool(slot.get("carry_enabled", False))
+
+    carry_wi_reversion_pct = (
+        float(slot.get("carry_wi_reversion_pct", 0.0))
+        if carry_enabled
+        else 0.0
+    )
+    carry_wi_reversion_pct = float(
+        np.clip(carry_wi_reversion_pct, 0.0, 1.0)
+    )
+
+    post_carry_ownership_factor = 1.0 - carry_wi_reversion_pct
 
     df["slot_id"] = slot["slot_id"]
+    df["dale_promote"] = bool(slot.get("dale_promote", False))
     df["tc_name"] = slot["tc_name"]
+
+    # First-production reversion:
+    # Period 0 is the spud / D&C month.
+    # Period 1 is the first modeled production month.
+    df["carry_reversion_active"] = (
+        carry_enabled & df["period"].gt(0)
+    )
+
+    df["ownership_factor"] = np.where(
+        df["carry_reversion_active"],
+        post_carry_ownership_factor,
+        1.0,
+    )
+
+    df["effective_working_interest"] = (
+        base_working_interest * df["ownership_factor"]
+    )
+
+    df["effective_net_wells"] = (
+        base_net_wells * df["ownership_factor"]
+    )
+
+    # Helpful audit fields
+    df["pre_carry_working_interest"] = base_working_interest
+    df["post_carry_working_interest"] = (
+        base_working_interest * post_carry_ownership_factor
+    )
+
+    df["pre_carry_effective_nri"] = base_working_interest * lease_nri
+    df["post_carry_effective_nri"] = (
+        base_working_interest
+        * post_carry_ownership_factor
+        * lease_nri
+    )
+
+    df["pre_carry_net_wells"] = base_net_wells
+    df["post_carry_net_wells"] = (
+        base_net_wells * post_carry_ownership_factor
+    )
 
     df["slot_gross_oil_production"] = df["gross_oil_production"] * gross_wells
     df["slot_gross_gas_production"] = df["gross_gas_production"] * gross_wells
     df["slot_gross_ngl_production"] = df["gross_ngl_production"] * gross_wells
     df["slot_gross_boe"] = df["monthly_production_boe"] * gross_wells
 
-    df["slot_net_oil_production"] = df["equity_oil_production"] * net_wells
-    df["slot_net_gas_production"] = df["equity_gas_production"] * net_wells
-    df["slot_net_ngl_production"] = df["equity_ngl_production"] * net_wells
+    # All production and operating economics use the reduced interest
+    # once the carry reversion begins.
+    df["slot_net_oil_production"] = (
+        df["equity_oil_production"] * df["effective_net_wells"]
+    )
+    df["slot_net_gas_production"] = (
+        df["equity_gas_production"] * df["effective_net_wells"]
+    )
+    df["slot_net_ngl_production"] = (
+        df["equity_ngl_production"] * df["effective_net_wells"]
+    )
     df["slot_net_boe"] = (
         df["equity_oil_production"]
         + df["equity_ngl_production"]
         + (df["equity_gas_production"] / 6.0)
-    ) * net_wells
+    ) * df["effective_net_wells"]
 
     df["slot_oil_revenue"] = (
-        df["equity_oil_production"] * df["local_oil_price"] * net_wells
+        df["equity_oil_production"]
+        * df["local_oil_price"]
+        * df["effective_net_wells"]
     )
     df["slot_gas_revenue"] = (
-        df["equity_gas_production"] * df["local_gas_price"] * net_wells
+        df["equity_gas_production"]
+        * df["local_gas_price"]
+        * df["effective_net_wells"]
     )
     df["slot_ngl_revenue"] = (
-        df["equity_ngl_production"] * df["local_ngl_price"] * net_wells
+        df["equity_ngl_production"]
+        * df["local_ngl_price"]
+        * df["effective_net_wells"]
     )
     df["slot_total_revenue"] = (
         df["slot_oil_revenue"]
@@ -453,26 +524,33 @@ def build_slot_financials(
         + df["slot_ngl_revenue"]
     )
 
-    df["slot_loe"] = df["total_loe"] * net_wells
-    df["slot_tax"] = df["tax"] * net_wells
-    df["slot_capex"] = df["capex"] * net_wells
+    df["slot_loe"] = df["total_loe"] * df["effective_net_wells"]
+    df["slot_tax"] = df["tax"] * df["effective_net_wells"]
+
+       # We pay D&C at our full original WI before the WI reversion.
+    df["slot_capex"] = df["capex"] * base_net_wells
 
     df["slot_operating_profit"] = (
         df["slot_total_revenue"] + df["slot_loe"] + df["slot_tax"]
     )
 
-    df["slot_pud_cash_flow"] = df["slot_operating_profit"] + df["slot_capex"]
+    df["slot_pud_cash_flow"] = (
+        df["slot_operating_profit"] + df["slot_capex"]
+    )
 
     df["slot_asset_purchase"] = 0.0
     df["slot_promote"] = 0.0
 
     df["slot_total_cash_flow"] = (
-        df["slot_pud_cash_flow"] + df["slot_asset_purchase"] + df["slot_promote"]
+        df["slot_pud_cash_flow"]
+        + df["slot_asset_purchase"]
+        + df["slot_promote"]
     )
 
-    df["working_interest"] = float(slot["working_interest"])
-    df["net_wells"] = float(slot["net_wells_calc"])
-    df["gross_wells"] = float(slot["gross_wells"])
+    # Preserve the original ownership fields for backward compatibility.
+    df["working_interest"] = base_working_interest
+    df["net_wells"] = base_net_wells
+    df["gross_wells"] = gross_wells
     df["acquisition_cost"] = float(slot["acquisition_cost"])
     df["bid_price_final"] = float(slot["bid_price_final"])
     df["ngl_recovery_case"] = slot_ngl["recovery_case"]
@@ -686,6 +764,70 @@ def add_promote_test_columns(df, deal_settings):
 
     return df
 
+def apply_promote_to_slots(all_slots_df, deal_settings):
+    df = all_slots_df.copy()
+
+    if "dale_promote" not in df.columns:
+        df["dale_promote"] = False
+
+    df["dale_promote"] = df["dale_promote"].fillna(False).astype(bool)
+    df["slot_promote"] = 0.0
+
+    if not bool(deal_settings["promote_enabled"]):
+        df["slot_total_cash_flow"] = (
+            df["slot_pud_cash_flow"]
+            + df["slot_asset_purchase"]
+            + df["slot_promote"]
+        )
+        return df
+
+    promoted_mask = df["dale_promote"]
+
+    if not promoted_mask.any():
+        df["slot_total_cash_flow"] = (
+            df["slot_pud_cash_flow"]
+            + df["slot_asset_purchase"]
+            + df["slot_promote"]
+        )
+        return df
+
+    promoted_deal_df = roll_up_deal(df.loc[promoted_mask].copy())
+    promoted_deal_df = add_promote_test_columns(promoted_deal_df, deal_settings)
+
+    monthly_promote = promoted_deal_df[["date", "slot_promote"]].rename(
+        columns={"slot_promote": "monthly_promote_total"}
+    )
+
+    df = df.merge(monthly_promote, on="date", how="left")
+    df["monthly_promote_total"] = df["monthly_promote_total"].fillna(0.0)
+
+    df["promoted_monthly_pud_cf"] = 0.0
+    df.loc[promoted_mask, "promoted_monthly_pud_cf"] = (
+        df.loc[promoted_mask]
+        .groupby("date")["slot_pud_cash_flow"]
+        .transform("sum")
+    )
+
+    alloc_mask = promoted_mask & df["promoted_monthly_pud_cf"].ne(0)
+
+    df.loc[alloc_mask, "slot_promote"] = (
+        df.loc[alloc_mask, "monthly_promote_total"]
+        * df.loc[alloc_mask, "slot_pud_cash_flow"]
+        / df.loc[alloc_mask, "promoted_monthly_pud_cf"]
+    )
+
+    df["slot_total_cash_flow"] = (
+        df["slot_pud_cash_flow"]
+        + df["slot_asset_purchase"]
+        + df["slot_promote"]
+    )
+
+    df = df.drop(
+        columns=["monthly_promote_total", "promoted_monthly_pud_cf"],
+        errors="ignore",
+    )
+
+    return df
 
 def calc_financial_irr(df):
     if pyxirr is None:
@@ -794,6 +936,9 @@ def prepare_slot_inputs(slot_df, deal_inputs):
 
     required_defaults = {
         "slot_id": 0,
+        "dale_promote": False,
+        "carry_enabled": False,
+        "carry_wi_reversion_pct": 0.0,
         "use_calc_unit_acres": False,
         "flowback_delay": 4,
         "tc_risk": 1.0,
@@ -829,6 +974,7 @@ def prepare_slot_inputs(slot_df, deal_inputs):
 
     numeric_cols = [
         "slot_id",
+        "carry_wi_reversion_pct",
         "lateral_length",
         "gross_wells",
         "net_acres",
@@ -855,6 +1001,22 @@ def prepare_slot_inputs(slot_df, deal_inputs):
     df["use_calc_unit_acres"] = df["use_calc_unit_acres"].astype(bool)
     df["tc_name"] = df["tc_name"].astype(str)
 
+    df["carry_enabled"] = df["carry_enabled"].astype(bool)
+
+    df["carry_wi_reversion_pct"] = (
+        pd.to_numeric(df["carry_wi_reversion_pct"], errors="coerce")
+        .fillna(0.0)
+        .clip(lower=0.0, upper=100.0)
+        / 100.0
+    )
+
+    # App input is entered as a whole percent: 35 = 35%.
+    df["carry_wi_reversion_pct"] = np.where(
+        df["carry_wi_reversion_pct"] > 1.0,
+        df["carry_wi_reversion_pct"] / 100.0,
+        df["carry_wi_reversion_pct"],
+    )
+    
     return df
 
 
@@ -956,9 +1118,10 @@ def run_deal_model(slot_df, deal_inputs, type_curve_file="type_curve_library.xls
         global_assumptions=global_assumptions,
     )
 
+    all_slots_df = apply_promote_to_slots(all_slots_df, deal_settings)
+    
     deal_df = roll_up_deal(all_slots_df)
-    deal_df = add_promote_test_columns(deal_df, deal_settings)
-
+    
     slot_audit_df = build_slot_audit_view(all_slots_df)
     deal_audit_df = build_deal_audit_view(deal_df)
 
