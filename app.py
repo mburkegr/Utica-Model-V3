@@ -278,6 +278,9 @@ def build_slot_template(num_slots):
         rows.append(
             {
                 "include_slot": True,
+                "dale_promote": False,
+                "carry_enabled": False,
+                "carry_wi_reversion_pct": 0.0,
                 "slot_id": i,
                 "tc_name": "Choose TC",
                 "gross_wells": 1.0,
@@ -346,6 +349,18 @@ def apply_calc_unit_acres(df):
 
 def build_sensitivity_range(base_value, step, steps_each_way=3):
     return [base_value + step * i for i in range(-steps_each_way, steps_each_way + 1)]
+
+def weighted_avg_by_net_acres(slot_df, value_col, weight_col="net_acres"):
+    """Return a net-acre weighted average for a slot-level input."""
+    values = pd.to_numeric(slot_df[value_col], errors="coerce")
+    weights = pd.to_numeric(slot_df[weight_col], errors="coerce").fillna(0.0)
+
+    valid = values.notna() & weights.gt(0)
+
+    if not valid.any():
+        return float(values.mean()) if values.notna().any() else 0.0
+
+    return float((values[valid] * weights[valid]).sum() / weights[valid].sum())
 
 @st.cache_data(show_spinner=False)
 def run_individual_slot_returns(slot_df, deal_inputs):
@@ -472,6 +487,10 @@ def run_tcrisk_bid_sensitivity(slot_df, deal_inputs, tc_risk_values, bid_values)
     irr_table = pd.DataFrame(index=bid_values, columns=tc_risk_values, dtype=float)
     moic_table = pd.DataFrame(index=bid_values, columns=tc_risk_values, dtype=float)
 
+    # This is the displayed/base weighted-average TC risk.
+    # At this exact value, delta = 0, so each slot keeps its actual original TC risk.
+    base_tc_risk = weighted_avg_by_net_acres(slot_df, "tc_risk")
+
     for tc_risk in tc_risk_values:
         for bid in bid_values:
             sens_deal_inputs = deal_inputs.copy()
@@ -479,7 +498,15 @@ def run_tcrisk_bid_sensitivity(slot_df, deal_inputs, tc_risk_values, bid_values)
             sens_deal_inputs["bid_override"] = float(bid)
 
             sens_slot_df = slot_df.copy()
-            sens_slot_df["tc_risk"] = float(tc_risk)
+
+            # Apply sensitivity as +/- change from the base weighted average,
+            # instead of setting every slot to the same absolute TC risk.
+            tc_risk_delta = float(tc_risk) - float(base_tc_risk)
+
+            sens_slot_df["tc_risk"] = (
+                pd.to_numeric(sens_slot_df["tc_risk"], errors="coerce").fillna(0.0)
+                + tc_risk_delta
+            ).clip(lower=0.0)
 
             try:
                 _, _, _, _, irr, moic = run_deal_model(sens_slot_df, sens_deal_inputs)
@@ -496,6 +523,10 @@ def run_ngl_yield_bid_sensitivity(slot_df, deal_inputs, ngl_yield_values, bid_va
     irr_table = pd.DataFrame(index=bid_values, columns=ngl_yield_values, dtype=float)
     moic_table = pd.DataFrame(index=bid_values, columns=ngl_yield_values, dtype=float)
 
+    # This is the displayed/base weighted-average NGL yield.
+    # At this exact value, delta = 0, so each slot keeps its actual original NGL yield.
+    base_ngl_yield = weighted_avg_by_net_acres(slot_df, "ngl_yield")
+
     for ngl_yield in ngl_yield_values:
         for bid in bid_values:
             sens_deal_inputs = deal_inputs.copy()
@@ -503,7 +534,15 @@ def run_ngl_yield_bid_sensitivity(slot_df, deal_inputs, ngl_yield_values, bid_va
             sens_deal_inputs["bid_override"] = float(bid)
 
             sens_slot_df = slot_df.copy()
-            sens_slot_df["ngl_yield"] = float(ngl_yield)
+
+            # Apply sensitivity as +/- change from the base weighted average,
+            # instead of setting every slot to the same absolute NGL yield.
+            ngl_delta = float(ngl_yield) - float(base_ngl_yield)
+
+            sens_slot_df["ngl_yield"] = (
+                pd.to_numeric(sens_slot_df["ngl_yield"], errors="coerce").fillna(0.0)
+                + ngl_delta
+            ).clip(lower=0.0)
 
             try:
                 _, _, _, _, irr, moic = run_deal_model(sens_slot_df, sens_deal_inputs)
@@ -1917,7 +1956,7 @@ def build_scenario_scatter_chart(slot_df, deal_inputs, base_bid, base_dc):
 
             legend_seen.add(dc_case)
 
-    base_tc_risk = round(float(slot_df["tc_risk"].mean()), 2)
+    base_tc_risk = round(weighted_avg_by_net_acres(slot_df, "tc_risk"), 2)
     base_bid_rounded = round(float(base_bid), 2)
     
     base_points = chart_df[
@@ -2117,19 +2156,19 @@ def build_email_html(
     base_dc = (
         float(deal_inputs["dc_override"])
         if deal_inputs["use_dc_override"]
-        else float(slot_df["dc_costs"].mean())
+        else weighted_avg_by_net_acres(slot_df, "dc_costs")
     )
-
+    
     base_bid = (
         float(deal_inputs["bid_override"])
         if deal_inputs["use_bid_override"]
-        else float(slot_df["bid_per_acre"].mean())
+        else weighted_avg_by_net_acres(slot_df, "bid_per_acre")
     )
-
+    
     total_wells = float(slot_df["gross_wells"].sum())
-    avg_ll = float(slot_df["lateral_length"].mean())
-    avg_pct_unitized = float(slot_df["pct_unitized"].mean())
-    avg_tc_risk = float(slot_df["tc_risk"].mean())
+    avg_ll = weighted_avg_by_net_acres(slot_df, "lateral_length")
+    avg_pct_unitized = weighted_avg_by_net_acres(slot_df, "pct_unitized")
+    avg_tc_risk = weighted_avg_by_net_acres(slot_df, "tc_risk")
 
     tc_names = slot_df["tc_name"].dropna().astype(str).unique().tolist()
     tc_name_text = ", ".join(tc_names)
@@ -2270,6 +2309,23 @@ if "slot_df" not in st.session_state:
 
 if "include_slot" not in st.session_state["slot_df"].columns:
     st.session_state["slot_df"].insert(0, "include_slot", True)
+    
+if "dale_promote" not in st.session_state["slot_df"].columns:
+    st.session_state["slot_df"].insert(1, "dale_promote", False)
+
+if "carry_enabled" not in st.session_state["slot_df"].columns:
+    st.session_state["slot_df"].insert(2, "carry_enabled", False)
+
+if "carry_dnc_pct" in st.session_state["slot_df"].columns:
+    st.session_state["slot_df"] = st.session_state["slot_df"].drop(
+        columns=["carry_dnc_pct"]
+    )
+
+if "carry_wi_reversion_pct" not in st.session_state["slot_df"].columns:
+    st.session_state["slot_df"]["carry_wi_reversion_pct"] = 0.0
+
+if "model_deal_inputs" not in st.session_state:
+    st.session_state["model_deal_inputs"] = None
 
 if "deal_df" not in st.session_state:
     st.session_state["deal_df"] = None
@@ -2406,14 +2462,18 @@ with st.sidebar.expander("NGL Component Prices", expanded=False):
     price_pentanes = st.number_input("Pentanes Price", value=1.22125, step=0.01, format="%.5f")
 
 st.sidebar.subheader("Dale Promote")
-promote_enabled = st.sidebar.checkbox("Dale Promote On", value=False)
+
+dale_promote_override = st.sidebar.checkbox(
+    "Dale Promote Override - Apply to All Slots",
+    value=False,
+)
 
 promote_rate = st.sidebar.number_input(
     "Promote",
     value=0.0625,
     step=0.01,
     format="%.4f",
-    disabled=not promote_enabled,
+    disabled=False,
 )
 
 promote_multiple = st.sidebar.number_input(
@@ -2421,7 +2481,7 @@ promote_multiple = st.sidebar.number_input(
     value=1.00,
     step=0.05,
     format="%.2f",
-    disabled=not promote_enabled,
+    disabled=False,
 )
 
 promote_irr_threshold = st.sidebar.number_input(
@@ -2429,7 +2489,7 @@ promote_irr_threshold = st.sidebar.number_input(
     value=0.00,
     step=0.01,
     format="%.4f",
-    disabled=not promote_enabled,
+    disabled=False,
 )
 
 deal_inputs = {
@@ -2471,10 +2531,11 @@ deal_inputs = {
     "price_isobutane": price_isobutane,
     "price_butane": price_butane,
     "price_pentanes": price_pentanes,
-    "promote_enabled": promote_enabled,
-    "promote_rate": promote_rate if promote_enabled else 0.0,
-    "promote_multiple": promote_multiple if promote_enabled else 0.0,
-    "promote_irr_threshold": promote_irr_threshold if promote_enabled else 0.0,
+    "dale_promote_override": dale_promote_override,
+    "promote_enabled": False,  # set right before model run based on selected slots
+    "promote_rate": promote_rate,
+    "promote_multiple": promote_multiple,
+    "promote_irr_threshold": promote_irr_threshold,
 }
 
 
@@ -2526,6 +2587,9 @@ with st.form("slot_inputs_form"):
     key="slot_editor",
     column_order=[
         "include_slot",
+        "dale_promote",
+        "carry_enabled",
+        "carry_wi_reversion_pct",
         "slot_id",
         "tc_name",
         "gross_wells",
@@ -2553,6 +2617,27 @@ with st.form("slot_inputs_form"):
             "Include",
             help="Include this slot in the model run.",
             default=True,
+        ),
+        "dale_promote": st.column_config.CheckboxColumn(
+            "Dale Promote",
+            help="Include this slot in the Dale promote calculation.",
+            default=False,
+        ),
+        "carry_enabled": st.column_config.CheckboxColumn(
+            "Carry / WI Reversion",
+            help=(
+                "We fund D&C at our original WI, then surrender a portion "
+                "of our original WI beginning with first production."
+            ),
+            default=False,
+        ),
+        "carry_wi_reversion_pct": st.column_config.NumberColumn(
+            "WI Given Up (%)",
+            min_value=0.0,
+            max_value=100.0,
+            step=1.0,
+            format="%.0f%%",
+            help="Enter 35 for a 35% WI reversion.",
         ),
         "slot_id": st.column_config.NumberColumn("Slot", format="%d", disabled=True),
         "tc_name": st.column_config.SelectboxColumn("Type Curve", options=tc_names, required=True),
@@ -2600,7 +2685,21 @@ if apply_slot_changes:
         cleaned_slot_df["tc_risk"],
         errors="coerce",
     ).fillna(1.0).astype(float)
+    
+    cleaned_slot_df["carry_enabled"] = (
+        cleaned_slot_df["carry_enabled"]
+        .fillna(False)
+        .astype(bool)
+    )
 
+    cleaned_slot_df["carry_wi_reversion_pct"] = (
+        pd.to_numeric(
+            cleaned_slot_df["carry_wi_reversion_pct"],
+            errors="coerce",
+        )
+        .fillna(0.0)
+        .clip(lower=0.0, upper=100.0)
+    )
     st.session_state["slot_df"] = apply_calc_unit_acres(cleaned_slot_df)
     st.session_state["model_has_run"] = False
 
@@ -2623,11 +2722,26 @@ if run_model_clicked:
 
     else:
         model_slot_df = included_slot_df.drop(columns=["include_slot"], errors="ignore").copy()
-
+        
+        if deal_inputs.get("dale_promote_override", False):
+            model_slot_df["dale_promote"] = True
+        
+        run_deal_inputs = deal_inputs.copy()
+        run_deal_inputs["promote_enabled"] = bool(
+            model_slot_df["dale_promote"].fillna(False).any()
+        )
+        
+        if not run_deal_inputs["promote_enabled"]:
+            run_deal_inputs["promote_rate"] = 0.0
+            run_deal_inputs["promote_multiple"] = 0.0
+            run_deal_inputs["promote_irr_threshold"] = 0.0
+        
         all_slots_df, deal_df, slot_audit_df, deal_audit_df, irr, moic = run_deal_model(
             model_slot_df,
-            deal_inputs,
+            run_deal_inputs,
         )
+        
+        st.session_state["model_deal_inputs"] = run_deal_inputs
 
         st.session_state["model_slot_df"] = model_slot_df
         st.session_state["all_slots_df"] = all_slots_df
@@ -2695,6 +2809,7 @@ if (
     deal_audit_df = st.session_state["deal_audit_df"]
     slot_audit_df = st.session_state["slot_audit_df"]
     slot_df = st.session_state["model_slot_df"].copy()
+    deal_inputs = st.session_state.get("model_deal_inputs", deal_inputs)
 
     deal_display_df = deal_audit_df[[col for col in DEAL_DISPLAY_COLS if col in deal_audit_df.columns]].copy()
     slot_display_df = slot_audit_df[[col for col in SLOT_DISPLAY_COLS if col in slot_audit_df.columns]].copy()
@@ -2743,8 +2858,17 @@ if (
     with col5:
         st.metric("MOIC", format_accounting_number(moic, decimals=2, suffix="x", zero_as_dash=False) if moic is not None else "N/A")
 
-    base_dc = deal_inputs["dc_override"] if deal_inputs["use_dc_override"] else float(slot_df["dc_costs"].mean())
-    base_bid = deal_inputs["bid_override"] if deal_inputs["use_bid_override"] else float(slot_df["bid_per_acre"].mean())
+    base_dc = (
+        deal_inputs["dc_override"]
+        if deal_inputs["use_dc_override"]
+        else weighted_avg_by_net_acres(slot_df, "dc_costs")
+    )
+    
+    base_bid = (
+        deal_inputs["bid_override"]
+        if deal_inputs["use_bid_override"]
+        else weighted_avg_by_net_acres(slot_df, "bid_per_acre")
+    )
 
     if not disable_heavy_outputs:
         st.subheader("Sensitivity Tables")
@@ -2784,17 +2908,21 @@ if (
         )
     
         bid_values = build_sensitivity_range(base_bid, 500.0, 3)
-        tc_risk_values = [0.70, 0.80, 0.90, 1.00, 1.10, 1.20, 1.30]
+        base_tc_risk = weighted_avg_by_net_acres(slot_df, "tc_risk")
+
+        tc_risk_values = [
+            max(0.0, base_tc_risk + 0.05 * i)
+            for i in range(-3, 4)
+        ]
         oil_values = [50, 55, 60, 65, 70]
         gas_values = [3.25, 3.50, 3.75, 4.00, 4.25]
         
-        base_ngl_yield = float(slot_df["ngl_yield"].mean())
-        ngl_yield_values = sorted(
-            {
-                round(max(0.0, base_ngl_yield + 0.50 * i), 2)
-                for i in range(-3, 4)
-            }
-        )
+        base_ngl_yield = weighted_avg_by_net_acres(slot_df, "ngl_yield")
+        
+        ngl_yield_values = [
+            max(0.0, base_ngl_yield + 0.50 * i)
+            for i in range(-3, 4)
+        ]
     
         irr_oil_bid_df, moic_oil_bid_df = run_oil_bid_sensitivity(
             slot_df=slot_df,
@@ -2924,7 +3052,7 @@ if (
             bid_values=bid_values,
         )
     
-        base_tc_risk = float(slot_df["tc_risk"].iloc[0])
+        base_tc_risk = weighted_avg_by_net_acres(slot_df, "tc_risk")
     
         irr_tcrisk_bid_heatmap = build_heatmap(
             irr_tcrisk_bid_df,
