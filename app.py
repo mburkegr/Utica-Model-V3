@@ -2653,7 +2653,7 @@ with st.form("slot_inputs_form"):
             default=False,
         ),
         "carry_enabled": st.column_config.CheckboxColumn(
-            "Carry / WI Reversion",
+            "Carry",
             help=(
                 "We fund D&C at our original WI, then surrender a portion "
                 "of our original WI beginning with first production."
