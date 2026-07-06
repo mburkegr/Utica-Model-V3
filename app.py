@@ -335,6 +335,19 @@ def to_excel_bytes(deal_df, slot_df):
     output.seek(0)
     return output.getvalue()
 
+def build_deal_log_csv(opportunity_name, overview_df, model_slot_df):
+    # This will be the very first section in the exported CSV.
+    deal_name_df = pd.DataFrame(
+        [{"Deal Name": str(opportunity_name).strip()}]
+    )
+
+    return (
+        deal_name_df.to_csv(index=False)
+        + "\nDEAL RUN OVERVIEW\n"
+        + overview_df.to_csv(index=False)
+        + "\nTC INPUTS USED FOR MODEL RUN\n"
+        + model_slot_df.to_csv(index=False)
+    )
 
 def apply_calc_unit_acres(df):
     df = df.copy()
@@ -2808,22 +2821,15 @@ if run_model_clicked:
         
         overview_df = pd.DataFrame(overview_rows)
         
-        # Build the CSV in separate sections so the TC headers sit
-        # directly above the TC input data in Excel.
-        deal_log_csv = (
-            "DEAL RUN OVERVIEW\n"
-            + overview_df.to_csv(index=False)
-            + "\n"
-            + "TC INPUTS USED FOR MODEL RUN\n"
-            + model_slot_df.to_csv(index=False)
-        )
-        
+        # Save the exact run information. The CSV itself is assembled later
+        # so it can include the opportunity name entered in the export section.
         deal_log_filename = (
             f"Utica_Deal_Log_"
             f"{run_timestamp.strftime('%Y%m%d_%H%M%S')}.csv"
         )
         
-        st.session_state["deal_log_csv"] = deal_log_csv
+        st.session_state["deal_log_overview_df"] = overview_df
+        st.session_state["deal_log_slot_df"] = model_slot_df.copy()
         st.session_state["deal_log_filename"] = deal_log_filename
         st.session_state["model_deal_inputs"] = run_deal_inputs
         st.session_state["model_slot_df"] = model_slot_df
@@ -3278,11 +3284,23 @@ if (
         
         st.subheader("Email Draft Export")
         
+        # Clear the old default text once, if it is still saved in session state.
+        if st.session_state.get("email_opportunity_name") == "Fill Name Here":
+            st.session_state["email_opportunity_name"] = ""
+        
         opportunity_name = st.text_input(
-            "Opportunity Name for Email Draft",
-            value="Fill Name Here",
+            "Opportunity Name for Email Draft / Deal Log",
+            placeholder="Fill Name Here",
             key="email_opportunity_name",
         )
+        
+        opportunity_name_clean = opportunity_name.strip()
+        exports_enabled = bool(opportunity_name_clean)
+        
+        if not exports_enabled:
+            st.caption(
+                "Enter an opportunity name to enable the email and deal-log downloads."
+            )
         
         prod_chart_stacked = build_production_profile_chart(
             deal_df,
@@ -3290,7 +3308,7 @@ if (
         )
         
         email_html = build_email_html(
-            opportunity_name=opportunity_name,
+            opportunity_name=opportunity_name_clean,
             deal_inputs=deal_inputs,
             slot_df=slot_df,
             irr=irr,
@@ -3316,14 +3334,25 @@ if (
             file_name="utica_email_draft.html",
             mime="text/html",
             key="download_email_html",
+            disabled=not exports_enabled,
         )
         
-        if "deal_log_csv" in st.session_state:
+        if (
+            "deal_log_overview_df" in st.session_state
+            and "deal_log_slot_df" in st.session_state
+        ):
+            deal_log_csv = build_deal_log_csv(
+                opportunity_name=opportunity_name_clean,
+                overview_df=st.session_state["deal_log_overview_df"],
+                model_slot_df=st.session_state["deal_log_slot_df"],
+            )
+        
             st.download_button(
                 label="Download Deal Log CSV",
-                data=st.session_state["deal_log_csv"],
+                data=deal_log_csv,
                 file_name=st.session_state["deal_log_filename"],
                 mime="text/csv",
+                disabled=not exports_enabled,
             )
 
     else:
