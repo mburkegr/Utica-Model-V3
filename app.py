@@ -3223,9 +3223,27 @@ if (
             )
 
     if not disable_heavy_outputs:
-        
+            
         cum_fcf_chart = build_cumulative_fcf_chart(deal_df, slot_df)
-
+    
+        # Use a simpler copy for static PNG / email export.
+        # The normal chart above still keeps the shaded spud bands,
+        # Gross Wells labels, and payback annotation in the app.
+        cum_fcf_chart_for_email = go.Figure(cum_fcf_chart)
+    
+        cum_fcf_chart_for_email.update_layout(
+            shapes=[],
+            annotations=[],
+            margin=dict(l=55, r=35, t=65, b=55),
+        )
+    
+        cum_fcf_chart_for_email.add_hline(
+            y=0,
+            line_width=1,
+            line_dash="dash",
+            line_color="gray",
+        )
+    
         with st.expander("Charts", expanded=False):
             chart_tab1, chart_tab2, chart_tab3 = st.tabs(
                 ["Cumulative FCF", "Production", "Scenario Matrix"]
@@ -3276,7 +3294,7 @@ if (
             irr_heatmap=irr_heatmap,
             irr_tcrisk_bid_heatmap=irr_tcrisk_bid_heatmap,
             irr_ngl_yield_bid_heatmap=irr_ngl_yield_bid_heatmap,
-            cum_fcf_chart=cum_fcf_chart,
+            cum_fcf_chart=cum_fcf_chart_for_email,
             prod_chart_stacked=prod_chart_stacked,
             scenario_scatter_chart=scenario_scatter_chart,
         )
