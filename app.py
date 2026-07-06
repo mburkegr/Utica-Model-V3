@@ -3274,7 +3274,6 @@ if (
                 data=st.session_state["deal_log_csv"],
                 file_name=st.session_state["deal_log_filename"],
                 mime="text/csv",
-                use_container_width=True,
             )
 
     else:
