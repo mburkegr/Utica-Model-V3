@@ -2567,39 +2567,35 @@ st.subheader("Type Curve Assumptions")
 file_mtime = os.path.getmtime("type_curve_library.xlsx")
 tc_names = ["Choose TC"] + load_tc_names(file_mtime)
 
-col1, col2, col3 = st.columns([2, 1, 1])
-
-with col1:
-    num_slots = st.number_input(
-        "Number of Slots",
-        min_value=1,
-        step=1,
-        value=len(st.session_state["slot_df"]),
-    )
-
-with col2:
-    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-    load_slots_clicked = st.button("Load Slots", use_container_width=True, type="primary")
-
-with col3:
-    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-    refresh_tc_clicked = st.button(
-        "Refresh Type Curves",
-        use_container_width=True,
-        type="secondary",
-        key="refresh_tc_btn",
-    )
-
-if refresh_tc_clicked:
-    load_tc_names.clear()
-    st.rerun()
-
-if load_slots_clicked:
-    st.session_state["slot_df"] = resize_slot_df(st.session_state["slot_df"], num_slots)
-    st.session_state["model_has_run"] = False
-
-# Slot editor only updates when user clicks Apply Slot Changes
+# Keep the slot-count controls in the same form as the editor.
+# This lets "Load Slots" receive unsaved changes currently in the grid.
 with st.form("slot_inputs_form"):
+    col1, col2, col3 = st.columns([2, 1, 1])
+
+    with col1:
+        num_slots = st.number_input(
+            "Number of Slots",
+            min_value=1,
+            step=1,
+            value=len(st.session_state["slot_df"]),
+        )
+
+    with col2:
+        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+        load_slots_clicked = st.form_submit_button(
+            "Load Slots",
+            use_container_width=True,
+            type="primary",
+        )
+
+    with col3:
+        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+        refresh_tc_clicked = st.form_submit_button(
+            "Refresh Type Curves",
+            use_container_width=True,
+            type="secondary",
+        )
+        
     edited_slot_df = st.data_editor(
     st.session_state["slot_df"],
     num_rows="fixed",
@@ -2698,14 +2694,14 @@ with st.form("slot_inputs_form"):
         type="primary",
     )
 
-if apply_slot_changes:
+if load_slots_clicked or refresh_tc_clicked or apply_slot_changes:
     cleaned_slot_df = edited_slot_df.copy()
 
     cleaned_slot_df["tc_risk"] = pd.to_numeric(
         cleaned_slot_df["tc_risk"],
         errors="coerce",
     ).fillna(1.0).astype(float)
-    
+
     cleaned_slot_df["carry_enabled"] = (
         cleaned_slot_df["carry_enabled"]
         .fillna(False)
@@ -2720,8 +2716,24 @@ if apply_slot_changes:
         .fillna(0.0)
         .clip(lower=0.0, upper=100.0)
     )
-    st.session_state["slot_df"] = apply_calc_unit_acres(cleaned_slot_df)
+
+    cleaned_slot_df = apply_calc_unit_acres(cleaned_slot_df)
+
+    if load_slots_clicked:
+        cleaned_slot_df = resize_slot_df(
+            cleaned_slot_df,
+            int(num_slots),
+        )
+
+    st.session_state["slot_df"] = cleaned_slot_df
     st.session_state["model_has_run"] = False
+
+    if refresh_tc_clicked:
+        load_tc_names.clear()
+
+    # Rebuild the editor immediately when rows or dropdown options change.
+    if load_slots_clicked or refresh_tc_clicked:
+        st.rerun()
 
 slot_df = st.session_state["slot_df"].copy()
 
