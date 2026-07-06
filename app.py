@@ -2776,30 +2776,15 @@ if run_model_clicked:
         
         overview_df = pd.DataFrame(overview_rows)
         
-        # Label the TC input rows separately in the same CSV file
-        tc_inputs_export_df = model_slot_df.copy()
-        tc_inputs_export_df.insert(0, "Section", "TC Inputs")
-        
-        # Combine main sidebar assumptions and TC input table into one CSV
-        deal_log_df = pd.concat(
-            [
-                overview_df,
-                pd.DataFrame(
-                    [
-                        {
-                            "Section": "",
-                            "Input": "",
-                            "Value": "",
-                        }
-                    ]
-                ),
-                tc_inputs_export_df,
-            ],
-            ignore_index=True,
-            sort=False,
+        # Build the CSV in separate sections so the TC headers sit
+        # directly above the TC input data in Excel.
+        deal_log_csv = (
+            "DEAL RUN OVERVIEW\n"
+            + overview_df.to_csv(index=False)
+            + "\n"
+            + "TC INPUTS USED FOR MODEL RUN\n"
+            + model_slot_df.to_csv(index=False)
         )
-        
-        deal_log_csv = deal_log_df.to_csv(index=False)
         
         deal_log_filename = (
             f"Utica_Deal_Log_"
