@@ -2107,22 +2107,40 @@ def build_scenario_scatter_chart(slot_df, deal_inputs, base_bid, base_dc):
     
     return fig
 
-def fig_to_base64_png(fig, width=1200, height=700):
+def fig_to_base64_png(fig, width=1200, height=700, chart_name="Chart"):
     try:
-        img_bytes = fig.to_image(format="png", width=width, height=height, scale=2)
+        img_bytes = fig.to_image(
+            format="png",
+            width=width,
+            height=height,
+            scale=1,
+        )
         return base64.b64encode(img_bytes).decode("utf-8")
-    except Exception:
+
+    except Exception as exc:
+        st.session_state["email_chart_export_error"] = (
+            f"{chart_name} export error: "
+            f"{type(exc).__name__}: {exc}"
+        )
         return None
 
 
 def html_img_from_fig(fig, width=900, height=500, title="Chart", max_width_px=None):
-    img_b64 = fig_to_base64_png(fig, width=width, height=height)
+    img_b64 = fig_to_base64_png(
+        fig,
+        width=width,
+        height=height,
+        chart_name=title,
+    )
 
     if img_b64 is None:
         return f"""
         <div style="margin:12px 0 20px 0; padding:12px; border:1px solid #cccccc;">
             <b>{title}</b><br>
-            Image export unavailable in current environment.
+            {st.session_state.get(
+                "email_chart_export_error",
+                "Image export unavailable in current environment.",
+            )}
         </div>
         """
 
@@ -2238,7 +2256,13 @@ def build_email_html(
     
     charts_html = "".join([
         "<h3 style='margin-bottom:8px;'>Charts:</h3>",
-        html_img_from_fig(cum_fcf_chart, width=1100, height=520, title="Cumulative FCF"),
+        html_img_from_fig(
+            cum_fcf_chart,
+            width=950,
+            height=450,
+            title="Cumulative FCF",
+            max_width_px=950,
+        ),
         html_img_from_fig(prod_chart_stacked, width=1100, height=520, title="Production in BOE/d"),
         html_img_from_fig(
             scenario_scatter_chart,
