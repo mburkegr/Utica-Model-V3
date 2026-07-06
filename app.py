@@ -1886,7 +1886,7 @@ def build_scenario_scatter_chart(slot_df, deal_inputs, base_bid, base_dc):
     size_map = {
         0.80: 10,
         1.00: 20,
-        1.20: 40,
+        1.20: 32,
     }
 
     dc_label_map = {
@@ -1973,14 +1973,18 @@ def build_scenario_scatter_chart(slot_df, deal_inputs, base_bid, base_dc):
             & (chart_df["tc_risk"].round(2) == 1.00)
             & (chart_df["bid"].round(2) == base_bid_rounded)
         ].copy()
-
-
     
     tc_legend_items = [
         ("TC Risk 80%", 0.80),
         ("TC Risk 100%", 1.00),
         ("TC Risk 120%", 1.20),
     ]
+    
+    legend_size_map = {
+        0.80: 10,
+        1.00: 20,
+        1.20: 42,
+    }
     
     for label, risk in tc_legend_items:
         fig.add_trace(
@@ -1993,7 +1997,7 @@ def build_scenario_scatter_chart(slot_df, deal_inputs, base_bid, base_dc):
                 showlegend=True,
                 marker=dict(
                     color="rgba(120,120,120,0.85)",
-                    size=size_map[risk],
+                    size=legend_size_map[risk],
                     line=dict(color="white", width=0.5),
                 ),
                 hoverinfo="skip",
