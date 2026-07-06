@@ -2740,9 +2740,75 @@ if run_model_clicked:
             model_slot_df,
             run_deal_inputs,
         )
-        
-        st.session_state["model_deal_inputs"] = run_deal_inputs
 
+        # ------------------------------------------------------------
+        # COMPLIANCE DEAL LOG EXPORT — SAVE EXACT INPUTS USED THIS RUN
+        # ------------------------------------------------------------
+        run_timestamp = pd.Timestamp.now(tz="America/Chicago")
+        
+        overview_rows = [
+            {
+                "Section": "Run Information",
+                "Input": "Model Run Created",
+                "Value": run_timestamp.strftime("%m/%d/%Y %I:%M %p %Z"),
+            },
+            {
+                "Section": "Run Information",
+                "Input": "IRR",
+                "Value": irr,
+            },
+            {
+                "Section": "Run Information",
+                "Input": "MOIC",
+                "Value": moic,
+            },
+        ]
+        
+        # Add every main sidebar / deal assumption used in the run
+        for key, value in run_deal_inputs.items():
+            overview_rows.append(
+                {
+                    "Section": "Sidebar Inputs",
+                    "Input": str(key).replace("_", " ").title(),
+                    "Value": value,
+                }
+            )
+        
+        overview_df = pd.DataFrame(overview_rows)
+        
+        # Label the TC input rows separately in the same CSV file
+        tc_inputs_export_df = model_slot_df.copy()
+        tc_inputs_export_df.insert(0, "Section", "TC Inputs")
+        
+        # Combine main sidebar assumptions and TC input table into one CSV
+        deal_log_df = pd.concat(
+            [
+                overview_df,
+                pd.DataFrame(
+                    [
+                        {
+                            "Section": "",
+                            "Input": "",
+                            "Value": "",
+                        }
+                    ]
+                ),
+                tc_inputs_export_df,
+            ],
+            ignore_index=True,
+            sort=False,
+        )
+        
+        deal_log_csv = deal_log_df.to_csv(index=False)
+        
+        deal_log_filename = (
+            f"Utica_Deal_Log_"
+            f"{run_timestamp.strftime('%Y%m%d_%H%M%S')}.csv"
+        )
+        
+        st.session_state["deal_log_csv"] = deal_log_csv
+        st.session_state["deal_log_filename"] = deal_log_filename
+        st.session_state["model_deal_inputs"] = run_deal_inputs
         st.session_state["model_slot_df"] = model_slot_df
         st.session_state["all_slots_df"] = all_slots_df
         st.session_state["deal_df"] = deal_df
@@ -3216,6 +3282,15 @@ if (
             mime="text/html",
             key="download_email_html",
         )
+        
+        if "deal_log_csv" in st.session_state:
+            st.download_button(
+                label="Download Deal Log CSV",
+                data=st.session_state["deal_log_csv"],
+                file_name=st.session_state["deal_log_filename"],
+                mime="text/csv",
+                use_container_width=True,
+            )
 
     else:
         st.info(
