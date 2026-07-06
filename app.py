@@ -2021,7 +2021,7 @@ def build_scenario_scatter_chart(slot_df, deal_inputs, base_bid, base_dc):
             font=dict(size=26, color="black"),
         ),
         height=1000,
-        margin=dict(l=80, r=60, t=195, b=205),
+        margin=dict(l=80, r=60, t=195, b=245),
         plot_bgcolor="white",
         paper_bgcolor="white",
         legend=dict(
@@ -2079,39 +2079,27 @@ def build_scenario_scatter_chart(slot_df, deal_inputs, base_bid, base_dc):
     )
 
     # Centered custom TC Risk legend below the D&C legend.
-    tc_risk_legend = [
-        (0.34, 12, "TC Risk 80%"),
-        (0.50, 20, "TC Risk 100%"),
-        (0.68, 34, "TC Risk 120%"),
-    ]
-
-    for x_pos, bubble_size, label in tc_risk_legend:
-        fig.add_annotation(
-            x=x_pos,
-            y=-0.245,
-            xref="paper",
-            yref="paper",
-            text="●",
-            showarrow=False,
-            font=dict(
-                size=bubble_size,
-                color="rgba(120,120,120,0.85)",
-            ),
-            xanchor="right",
-            yanchor="middle",
-        )
-
-        fig.add_annotation(
-            x=x_pos + 0.012,
-            y=-0.245,
-            xref="paper",
-            yref="paper",
-            text=label,
-            showarrow=False,
-            font=dict(size=18, color="black"),
-            xanchor="left",
-            yanchor="middle",
-        )
+    fig.add_annotation(
+        x=0.50,
+        y=-0.285,
+        xref="paper",
+        yref="paper",
+        text=(
+            "<span style='font-size:14px; color:rgba(120,120,120,0.85);'>●</span>"
+            "&nbsp; TC Risk 80%"
+            "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
+            "<span style='font-size:20px; color:rgba(120,120,120,0.85);'>●</span>"
+            "&nbsp; TC Risk 100%"
+            "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
+            "<span style='font-size:30px; color:rgba(120,120,120,0.85);'>●</span>"
+            "&nbsp; TC Risk 120%"
+        ),
+        showarrow=False,
+        font=dict(size=18, color="black"),
+        xanchor="center",
+        yanchor="middle",
+        align="center",
+    )
     
     return fig
 
