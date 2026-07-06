@@ -2021,7 +2021,7 @@ def build_scenario_scatter_chart(slot_df, deal_inputs, base_bid, base_dc):
             font=dict(size=26, color="black"),
         ),
         height=1000,
-        margin=dict(l=80, r=60, t=195, b=245),
+        margin=dict(l=80, r=60, t=195, b=205),
         plot_bgcolor="white",
         paper_bgcolor="white",
         legend=dict(
@@ -2078,18 +2078,17 @@ def build_scenario_scatter_chart(slot_df, deal_inputs, base_bid, base_dc):
         yanchor="bottom",
     )
 
-        # Custom TC Risk legend.
-    # This avoids Plotly's built-in legend bubble-size cap.
+    # Centered custom TC Risk legend below the D&C legend.
     tc_risk_legend = [
-        (0.18, 12, "TC Risk 80%"),
+        (0.34, 12, "TC Risk 80%"),
         (0.50, 20, "TC Risk 100%"),
-        (0.82, 34, "TC Risk 120%"),
+        (0.68, 34, "TC Risk 120%"),
     ]
 
     for x_pos, bubble_size, label in tc_risk_legend:
         fig.add_annotation(
             x=x_pos,
-            y=-0.30,
+            y=-0.245,
             xref="paper",
             yref="paper",
             text="●",
@@ -2103,8 +2102,8 @@ def build_scenario_scatter_chart(slot_df, deal_inputs, base_bid, base_dc):
         )
 
         fig.add_annotation(
-            x=x_pos + 0.015,
-            y=-0.30,
+            x=x_pos + 0.012,
+            y=-0.245,
             xref="paper",
             yref="paper",
             text=label,
