@@ -1974,37 +1974,6 @@ def build_scenario_scatter_chart(slot_df, deal_inputs, base_bid, base_dc):
             & (chart_df["bid"].round(2) == base_bid_rounded)
         ].copy()
     
-    tc_legend_items = [
-        ("TC Risk 80%", 0.80),
-        ("TC Risk 100%", 1.00),
-        ("TC Risk 120%", 1.20),
-    ]
-    
-    legend_size_map = {
-        0.80: 10,
-        1.00: 20,
-        1.20: 42,
-    }
-    
-    for label, risk in tc_legend_items:
-        fig.add_trace(
-            go.Scatter(
-                x=[None],
-                y=[None],
-                mode="markers",
-                name=label,
-                legendgroup="tc",
-                showlegend=True,
-                marker=dict(
-                    color="rgba(120,120,120,0.85)",
-                    size=legend_size_map[risk],
-                    line=dict(color="white", width=0.5),
-                ),
-                hoverinfo="skip",
-            ),
-            row=1,
-            col=1,
-        )
 
     if not base_points.empty:
         fig.add_trace(
@@ -2052,7 +2021,7 @@ def build_scenario_scatter_chart(slot_df, deal_inputs, base_bid, base_dc):
             font=dict(size=26, color="black"),
         ),
         height=1000,
-        margin=dict(l=80, r=60, t=195, b=165),
+        margin=dict(l=80, r=60, t=195, b=245),
         plot_bgcolor="white",
         paper_bgcolor="white",
         legend=dict(
@@ -2108,6 +2077,42 @@ def build_scenario_scatter_chart(slot_df, deal_inputs, base_bid, base_dc):
         xanchor="center",
         yanchor="bottom",
     )
+
+        # Custom TC Risk legend.
+    # This avoids Plotly's built-in legend bubble-size cap.
+    tc_risk_legend = [
+        (0.18, 12, "TC Risk 80%"),
+        (0.50, 20, "TC Risk 100%"),
+        (0.82, 34, "TC Risk 120%"),
+    ]
+
+    for x_pos, bubble_size, label in tc_risk_legend:
+        fig.add_annotation(
+            x=x_pos,
+            y=-0.30,
+            xref="paper",
+            yref="paper",
+            text="●",
+            showarrow=False,
+            font=dict(
+                size=bubble_size,
+                color="rgba(120,120,120,0.85)",
+            ),
+            xanchor="right",
+            yanchor="middle",
+        )
+
+        fig.add_annotation(
+            x=x_pos + 0.015,
+            y=-0.30,
+            xref="paper",
+            yref="paper",
+            text=label,
+            showarrow=False,
+            font=dict(size=18, color="black"),
+            xanchor="left",
+            yanchor="middle",
+        )
     
     return fig
 
