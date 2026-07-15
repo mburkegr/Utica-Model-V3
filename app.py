@@ -128,9 +128,9 @@ def calc_slot_metrics(slot, deal_settings, total_net_acres):
     slot = slot.copy()
 
     if bool(deal_settings["use_bid_override"]):
-        bid_price_final = float(deal_settings["bid_override"])
+        bid_price_final = max(1.0, float(deal_settings["bid_override"]))
     else:
-        bid_price_final = float(slot["bid_per_acre"])
+        bid_price_final = max(1.0, float(slot["bid_per_acre"]))
 
     if bool(slot["use_calc_unit_acres"]):
         unit_acres_final = (
@@ -994,7 +994,7 @@ def prepare_deal_settings(deal_inputs):
     return {
         "effective_date": effective_date,
         "use_bid_override": bool(deal_inputs.get("use_bid_override", False)),
-        "bid_override": float(deal_inputs.get("bid_override", 0.0)),
+        "bid_override": max(1.0, float(deal_inputs.get("bid_override", 1.0))),
         "use_acquisition_override": bool(
             deal_inputs.get("use_acquisition_override", False)
         ),
@@ -1114,9 +1114,16 @@ def prepare_slot_inputs(slot_df, deal_inputs):
         df["dc_costs"] = df["dc_costs"].astype(float)
 
     if bool(deal_inputs.get("use_bid_override", False)):
-        df["bid_per_acre"] = float(deal_inputs.get("bid_override", 0.0))
+        df["bid_per_acre"] = max(
+            1.0,
+            float(deal_inputs.get("bid_override", 1.0)),
+        )
     else:
-        df["bid_per_acre"] = df["bid_per_acre"].astype(float)
+        df["bid_per_acre"] = (
+            pd.to_numeric(df["bid_per_acre"], errors="coerce")
+            .fillna(1.0)
+            .clip(lower=1.0)
+        )
 
     numeric_cols = [
         "slot_id",
@@ -1143,6 +1150,8 @@ def prepare_slot_inputs(slot_df, deal_inputs):
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
+    df["bid_per_acre"] = df["bid_per_acre"].clip(lower=1.0)
 
     df["use_calc_unit_acres"] = df["use_calc_unit_acres"].astype(bool)
     df["tc_name"] = df["tc_name"].astype(str)
