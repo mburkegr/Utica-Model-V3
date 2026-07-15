@@ -650,6 +650,11 @@ def build_all_slot_financials(
             months=360,
         )
 
+        # These are slot-level attributes and must remain populated on every
+        # aligned calendar row, including the acquisition month before spud.
+        slot_df["dale_promote"] = bool(slot_row.get("dale_promote", False))
+        slot_df["carry_enabled"] = bool(slot_row.get("carry_enabled", False))
+
         slot_calc = calc_slot_metrics(slot_row, deal_settings, total_net_acres)
 
         slot_df["slot_asset_purchase"] = 0.0
@@ -695,165 +700,252 @@ def roll_up_deal(all_slots_df):
         "slot_capex",
         "slot_pud_cash_flow",
         "slot_asset_purchase",
-        "slot_promote",
         "slot_total_cash_flow",
     ]
 
+    existing_sum_cols = [c for c in sum_cols if c in all_slots_df.columns]
+
     deal_df = (
-        all_slots_df.groupby("date", as_index=False)[sum_cols]
+        all_slots_df.groupby("date", as_index=False)[existing_sum_cols]
         .sum()
         .sort_values("date")
         .reset_index(drop=True)
     )
+
+    # Promote schedule fields are identical for every slot on a given date.
+    # Carry them into the deal-level output without summing them across slots.
+    promote_audit_cols = [
+        "promote_monthly_investment",
+        "promote_monthly_distributions",
+        "promote_cumulative_investment",
+        "promote_cumulative_distributions",
+        "promote_running_multiple",
+        "promote_hurdle_reached",
+        "promote_active",
+        "promote_hurdle_date",
+        "promote_effective_date",
+    ]
+    existing_audit_cols = [c for c in promote_audit_cols if c in all_slots_df.columns]
+
+    if existing_audit_cols:
+        promote_audit = (
+            all_slots_df.groupby("date", as_index=False)[existing_audit_cols]
+            .first()
+            .sort_values("date")
+        )
+        deal_df = deal_df.merge(promote_audit, on="date", how="left")
+
     return deal_df
 
 
 # -----------------------------
-# Promote + returns
+# True WI promote + returns
 # -----------------------------
-def add_promote_test_columns(df, deal_settings):
-    df = df.copy()
+def build_promote_schedule(promoted_rows, deal_settings):
+    """Build the pooled promote hurdle schedule for promote-eligible slots.
 
-    if not bool(deal_settings["promote_enabled"]):
-        df["cum_positive_pud_cf"] = df["slot_pud_cash_flow"].clip(lower=0).cumsum()
-        df["cum_negative_pud_cf"] = (
-            df["slot_pud_cash_flow"].where(df["slot_pud_cash_flow"] < 0, 0).cumsum()
-        )
-        df["cum_negative_asset_purchase"] = (
-            df["slot_asset_purchase"].where(df["slot_asset_purchase"] < 0, 0).cumsum()
-        )
-        df["running_moic_for_promote"] = 0.0
-        df["running_irr_for_promote"] = 0.0
-        df["running_moic_for_promote_lag"] = 0.0
-        df["running_irr_for_promote_lag"] = 0.0
-        df["promote_triggered"] = False
-        df["slot_promote"] = 0.0
-        df["slot_total_cash_flow"] = (
-            df["slot_pud_cash_flow"] + df["slot_asset_purchase"] + df["slot_promote"]
-        )
-        return df
-
-    df["cum_positive_pud_cf"] = df["slot_pud_cash_flow"].clip(lower=0).cumsum()
-
-    df["cum_negative_pud_cf"] = (
-        df["slot_pud_cash_flow"].where(df["slot_pud_cash_flow"] < 0, 0).cumsum()
+    Investment is limited to acquisition cost plus funded D&C. Distributions
+    are positive operating cash flow before the promote. Once the hurdle is
+    reached, the WI reversion permanently becomes effective the following
+    modeled month.
+    """
+    monthly = (
+        promoted_rows.groupby("date", as_index=False)[
+            ["slot_operating_profit", "slot_capex", "slot_asset_purchase"]
+        ]
+        .sum()
+        .sort_values("date")
+        .reset_index(drop=True)
     )
 
-    df["cum_negative_asset_purchase"] = (
-        df["slot_asset_purchase"].where(df["slot_asset_purchase"] < 0, 0).cumsum()
+    monthly["promote_monthly_investment"] = (
+        -monthly["slot_asset_purchase"].clip(upper=0.0)
+        -monthly["slot_capex"].clip(upper=0.0)
     )
+    monthly["promote_monthly_distributions"] = monthly[
+        "slot_operating_profit"
+    ].clip(lower=0.0)
 
-    invested_base = -(df["cum_negative_pud_cf"] + df["cum_negative_asset_purchase"])
-    df["running_moic_for_promote"] = np.where(
-        invested_base > 0,
-        df["cum_positive_pud_cf"] / invested_base,
+    monthly["promote_cumulative_investment"] = monthly[
+        "promote_monthly_investment"
+    ].cumsum()
+    monthly["promote_cumulative_distributions"] = monthly[
+        "promote_monthly_distributions"
+    ].cumsum()
+
+    invested = monthly["promote_cumulative_investment"]
+    monthly["promote_running_multiple"] = np.where(
+        invested > 0.0,
+        monthly["promote_cumulative_distributions"] / invested,
         0.0,
     )
 
-    running_irrs = []
-    for i in range(len(df)):
-        temp_cf = df.loc[:i, "slot_pud_cash_flow"] + df.loc[:i, "slot_asset_purchase"]
-        temp_dates = df.loc[:i, "date"]
-        try:
-            if pyxirr is None:
-                running_irrs.append(0.0)
-            else:
-                running_irrs.append(float(pyxirr.xirr(temp_dates, temp_cf)))
-        except Exception:
-            running_irrs.append(0.0)
-
-    df["running_irr_for_promote"] = running_irrs
-    df["running_moic_for_promote_lag"] = (
-        df["running_moic_for_promote"].shift(1).fillna(0.0)
-    )
-    df["running_irr_for_promote_lag"] = (
-        df["running_irr_for_promote"].shift(1).fillna(0.0)
+    hurdle = float(deal_settings.get("promote_multiple", 0.0))
+    monthly["promote_hurdle_reached"] = (
+        (invested > 0.0)
+        & (monthly["promote_running_multiple"] >= hurdle)
     )
 
-    df["promote_triggered"] = (
-        (df["running_moic_for_promote_lag"] >= float(deal_settings["promote_multiple"]))
-        & (
-            df["running_irr_for_promote_lag"]
-            >= float(deal_settings["promote_irr_threshold"])
-        )
-    )
+    # Once earned, the promote remains vested permanently. The WI transfer
+    # begins in the month after the hurdle is first achieved.
+    vested = monthly["promote_hurdle_reached"].cummax()
+    monthly["promote_active"] = vested.shift(1, fill_value=False).astype(bool)
 
-    df["slot_promote"] = np.where(
-        df["promote_triggered"],
-        -(df["slot_pud_cash_flow"] * float(deal_settings["promote_rate"])),
-        0.0,
-    )
+    hurdle_dates = monthly.loc[monthly["promote_hurdle_reached"], "date"]
+    active_dates = monthly.loc[monthly["promote_active"], "date"]
 
-    df["slot_total_cash_flow"] = (
-        df["slot_pud_cash_flow"] + df["slot_asset_purchase"] + df["slot_promote"]
-    )
+    hurdle_date = hurdle_dates.iloc[0] if not hurdle_dates.empty else pd.NaT
+    effective_date = active_dates.iloc[0] if not active_dates.empty else pd.NaT
 
-    return df
+    monthly["promote_hurdle_date"] = hurdle_date
+    monthly["promote_effective_date"] = effective_date
+
+    return monthly[
+        [
+            "date",
+            "promote_monthly_investment",
+            "promote_monthly_distributions",
+            "promote_cumulative_investment",
+            "promote_cumulative_distributions",
+            "promote_running_multiple",
+            "promote_hurdle_reached",
+            "promote_active",
+            "promote_hurdle_date",
+            "promote_effective_date",
+        ]
+    ]
+
 
 def apply_promote_to_slots(all_slots_df, deal_settings):
-    df = all_slots_df.copy()
+    """Apply a permanent WI reversion after the pooled multiple is earned."""
+    df = all_slots_df.copy().sort_values(["date", "slot_id"]).reset_index(drop=True)
 
     if "dale_promote" not in df.columns:
         df["dale_promote"] = False
 
     df["dale_promote"] = df["dale_promote"].fillna(False).astype(bool)
-    df["slot_promote"] = 0.0
+    df["slot_promote"] = 0.0  # retained only for backward-compatible outputs
 
-    if not bool(deal_settings["promote_enabled"]):
-        df["slot_total_cash_flow"] = (
-            df["slot_pud_cash_flow"]
-            + df["slot_asset_purchase"]
-            + df["slot_promote"]
-        )
-        return df
+    # Baseline ownership after any carry reversion, but before the true promote.
+    df["pre_promote_working_interest"] = df["effective_working_interest"]
+    df["pre_promote_net_wells"] = df["effective_net_wells"]
+    df["promote_ownership_factor"] = 1.0
+    df["promote_wi_transferred"] = 0.0
+    df["post_promote_working_interest"] = df["pre_promote_working_interest"]
+    df["post_promote_net_wells"] = df["pre_promote_net_wells"]
+
+    # Default audit fields when the promote is disabled or no slots are eligible.
+    df["promote_monthly_investment"] = 0.0
+    df["promote_monthly_distributions"] = 0.0
+    df["promote_cumulative_investment"] = 0.0
+    df["promote_cumulative_distributions"] = 0.0
+    df["promote_running_multiple"] = 0.0
+    df["promote_hurdle_reached"] = False
+    df["promote_active"] = False
+    df["promote_hurdle_date"] = pd.NaT
+    df["promote_effective_date"] = pd.NaT
 
     promoted_mask = df["dale_promote"]
+    promote_enabled = bool(deal_settings.get("promote_enabled", False))
 
-    if not promoted_mask.any():
-        df["slot_total_cash_flow"] = (
-            df["slot_pud_cash_flow"]
-            + df["slot_asset_purchase"]
-            + df["slot_promote"]
+    if promote_enabled and promoted_mask.any():
+        schedule = build_promote_schedule(
+            df.loc[promoted_mask].copy(),
+            deal_settings,
         )
-        return df
 
-    promoted_deal_df = roll_up_deal(df.loc[promoted_mask].copy())
-    promoted_deal_df = add_promote_test_columns(promoted_deal_df, deal_settings)
+        # Remove initialized schedule fields before merging the actual schedule.
+        schedule_cols = [c for c in schedule.columns if c != "date"]
+        df = df.drop(columns=schedule_cols, errors="ignore").merge(
+            schedule,
+            on="date",
+            how="left",
+        )
 
-    monthly_promote = promoted_deal_df[["date", "slot_promote"]].rename(
-        columns={"slot_promote": "monthly_promote_total"}
-    )
+        numeric_schedule_cols = [
+            "promote_monthly_investment",
+            "promote_monthly_distributions",
+            "promote_cumulative_investment",
+            "promote_cumulative_distributions",
+            "promote_running_multiple",
+        ]
+        df[numeric_schedule_cols] = df[numeric_schedule_cols].fillna(0.0)
+        df["promote_hurdle_reached"] = (
+            df["promote_hurdle_reached"].fillna(False).astype(bool)
+        )
+        df["promote_active"] = df["promote_active"].fillna(False).astype(bool)
 
-    df = df.merge(monthly_promote, on="date", how="left")
-    df["monthly_promote_total"] = df["monthly_promote_total"].fillna(0.0)
+        wi_reversion_pct = float(
+            np.clip(
+                deal_settings.get("promote_wi_reversion_pct", 0.0),
+                0.0,
+                1.0,
+            )
+        )
+        post_promote_factor = 1.0 - wi_reversion_pct
+        active_promoted_mask = df["dale_promote"] & df["promote_active"]
 
-    df["promoted_monthly_pud_cf"] = 0.0
-    df.loc[promoted_mask, "promoted_monthly_pud_cf"] = (
-        df.loc[promoted_mask]
-        .groupby("date")["slot_pud_cash_flow"]
-        .transform("sum")
-    )
+        df.loc[active_promoted_mask, "promote_ownership_factor"] = (
+            post_promote_factor
+        )
+        df.loc[active_promoted_mask, "promote_wi_transferred"] = (
+            df.loc[active_promoted_mask, "pre_promote_working_interest"]
+            * wi_reversion_pct
+        )
 
-    alloc_mask = promoted_mask & df["promoted_monthly_pud_cf"].ne(0)
+        df["post_promote_working_interest"] = (
+            df["pre_promote_working_interest"]
+            * df["promote_ownership_factor"]
+        )
+        df["post_promote_net_wells"] = (
+            df["pre_promote_net_wells"]
+            * df["promote_ownership_factor"]
+        )
 
-    df.loc[alloc_mask, "slot_promote"] = (
-        df.loc[alloc_mask, "monthly_promote_total"]
-        * df.loc[alloc_mask, "slot_pud_cash_flow"]
-        / df.loc[alloc_mask, "promoted_monthly_pud_cf"]
-    )
+        # A true WI transfer changes ownership economics, not a separate expense.
+        # Gross production remains unchanged; all net economics and future D&C
+        # for eligible slots are reduced once the promote becomes effective.
+        scale_cols = [
+            "slot_net_oil_production",
+            "slot_net_gas_production",
+            "slot_net_ngl_production",
+            "slot_net_boe",
+            "slot_oil_revenue",
+            "slot_gas_revenue",
+            "slot_ngl_revenue",
+            "slot_total_revenue",
+            "slot_loe",
+            "slot_tax",
+            "slot_operating_profit",
+            "slot_capex",
+        ]
+        existing_scale_cols = [c for c in scale_cols if c in df.columns]
+        df.loc[active_promoted_mask, existing_scale_cols] = (
+            df.loc[active_promoted_mask, existing_scale_cols]
+            .multiply(post_promote_factor)
+        )
 
+        df.loc[active_promoted_mask, "effective_working_interest"] = df.loc[
+            active_promoted_mask, "post_promote_working_interest"
+        ]
+        df.loc[active_promoted_mask, "effective_net_wells"] = df.loc[
+            active_promoted_mask, "post_promote_net_wells"
+        ]
+        df.loc[active_promoted_mask, "ownership_factor"] = (
+            df.loc[active_promoted_mask, "ownership_factor"]
+            * post_promote_factor
+        )
+
+    # Recalculate cash flow after any ownership change. Acquisition cost remains
+    # unchanged because it is paid before the promote is earned.
+    df["slot_pud_cash_flow"] = df["slot_operating_profit"] + df["slot_capex"]
     df["slot_total_cash_flow"] = (
         df["slot_pud_cash_flow"]
         + df["slot_asset_purchase"]
-        + df["slot_promote"]
     )
 
-    df = df.drop(
-        columns=["monthly_promote_total", "promoted_monthly_pud_cf"],
-        errors="ignore",
-    )
+    return df.sort_values(["slot_id", "date"]).reset_index(drop=True)
 
-    return df
 
 def calc_financial_irr(df):
     if pyxirr is None:
@@ -882,6 +974,23 @@ def prepare_deal_settings(deal_inputs):
         deal_inputs.get("effective_date", default_effective_date())
     )
 
+    promote_enabled = bool(deal_inputs.get("promote_enabled", False))
+
+    # New app input is entered as a whole percent (for example, 12.5 = 12.5%).
+    # Fall back to the former promote_rate key for compatibility with old runs.
+    if "promote_wi_reversion_pct" in deal_inputs:
+        promote_wi_reversion_pct = (
+            float(deal_inputs.get("promote_wi_reversion_pct", 0.0)) / 100.0
+        )
+    else:
+        promote_wi_reversion_pct = float(deal_inputs.get("promote_rate", 0.0))
+        if promote_wi_reversion_pct > 1.0:
+            promote_wi_reversion_pct /= 100.0
+
+    promote_wi_reversion_pct = float(
+        np.clip(promote_wi_reversion_pct, 0.0, 1.0)
+    )
+
     return {
         "effective_date": effective_date,
         "use_bid_override": bool(deal_inputs.get("use_bid_override", False)),
@@ -892,20 +1001,13 @@ def prepare_deal_settings(deal_inputs):
         "acquisition_cost_override": float(
             deal_inputs.get("acquisition_cost_override", 0.0)
         ),
-        "promote_enabled": bool(deal_inputs.get("promote_enabled", False)),
-        "promote_rate": (
-            float(deal_inputs.get("promote_rate", 0.0))
-            if deal_inputs.get("promote_enabled", False)
-            else 0.0
+        "promote_enabled": promote_enabled,
+        "promote_wi_reversion_pct": (
+            promote_wi_reversion_pct if promote_enabled else 0.0
         ),
         "promote_multiple": (
             float(deal_inputs.get("promote_multiple", 0.0))
-            if deal_inputs.get("promote_enabled", False)
-            else 0.0
-        ),
-        "promote_irr_threshold": (
-            float(deal_inputs.get("promote_irr_threshold", 0.0))
-            if deal_inputs.get("promote_enabled", False)
+            if promote_enabled
             else 0.0
         ),
     }
@@ -1079,6 +1181,20 @@ def build_slot_audit_view(all_slots_df):
         "gross_wells",
         "net_wells",
         "working_interest",
+        "dale_promote",
+        "carry_reversion_active",
+        "pre_promote_working_interest",
+        "promote_wi_transferred",
+        "post_promote_working_interest",
+        "effective_working_interest",
+        "pre_promote_net_wells",
+        "post_promote_net_wells",
+        "effective_net_wells",
+        "promote_running_multiple",
+        "promote_hurdle_reached",
+        "promote_active",
+        "promote_hurdle_date",
+        "promote_effective_date",
         "bid_price_final",
         "acquisition_cost",
         "slot_shrink",
@@ -1100,7 +1216,6 @@ def build_slot_audit_view(all_slots_df):
         "slot_operating_profit",
         "slot_capex",
         "slot_asset_purchase",
-        "slot_promote",
         "slot_total_cash_flow",
         "cum_slot_total_cf",
     ]
@@ -1120,6 +1235,15 @@ def build_deal_audit_view(deal_df):
         "date",
         "month_label",
         "month_num",
+        "promote_monthly_investment",
+        "promote_monthly_distributions",
+        "promote_cumulative_investment",
+        "promote_cumulative_distributions",
+        "promote_running_multiple",
+        "promote_hurdle_reached",
+        "promote_active",
+        "promote_hurdle_date",
+        "promote_effective_date",
         "slot_gross_oil_production",
         "slot_gross_gas_production",
         "slot_gross_ngl_production",
@@ -1137,7 +1261,6 @@ def build_deal_audit_view(deal_df):
         "slot_operating_profit",
         "slot_capex",
         "slot_asset_purchase",
-        "slot_promote",
         "slot_total_cash_flow",
         "cum_total_cf",
     ]
