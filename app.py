@@ -432,6 +432,28 @@ def build_sensitivity_range(
 
     return sorted(values)
 
+def build_percentage_sensitivity_range(
+    base_value,
+    pct_step=0.05,
+    steps_each_way=4,
+    min_value=0.0,
+):
+    """Build a sensitivity range using percentage changes from the base.
+
+    Example: a 5% step with four steps each way produces 80% through
+    120% of the base value. Values are rounded to two decimals.
+    """
+    base_value = float(base_value)
+    values = [
+        max(
+            float(min_value),
+            base_value * (1.0 + float(pct_step) * i),
+        )
+        for i in range(-steps_each_way, steps_each_way + 1)
+    ]
+    return [round(value, 2) for value in values]
+
+
 def weighted_avg_by_net_acres(slot_df, value_col, weight_col="net_acres"):
     """Return a net-acre weighted average for a slot-level input."""
     values = pd.to_numeric(slot_df[value_col], errors="coerce")
@@ -443,6 +465,40 @@ def weighted_avg_by_net_acres(slot_df, value_col, weight_col="net_acres"):
         return float(values.mean()) if values.notna().any() else 0.0
 
     return float((values[valid] * weights[valid]).sum() / weights[valid].sum())
+
+
+def weighted_avg_spud_month_by_net_acres(
+    slot_df,
+    date_col="drilling_spud_month",
+    weight_col="net_acres",
+):
+    """Return a net-acre-weighted representative spud month.
+
+    The sensitivity shifts every slot by the same month delta, so relative
+    timing between slots is preserved. This weighted month is used only for
+    the displayed center date and axis labels.
+    """
+    dates = pd.to_datetime(slot_df[date_col], errors="coerce")
+    weights = pd.to_numeric(slot_df[weight_col], errors="coerce").fillna(0.0)
+
+    valid = dates.notna() & weights.gt(0)
+    if not valid.any():
+        valid_dates = dates.dropna()
+        if valid_dates.empty:
+            return pd.Timestamp(next_month_start())
+        return valid_dates.iloc[0].to_period("M").to_timestamp()
+
+    month_numbers = (
+        dates[valid].dt.year.astype(float) * 12.0
+        + dates[valid].dt.month.astype(float)
+        - 1.0
+    )
+    weighted_month_number = int(
+        round((month_numbers * weights[valid]).sum() / weights[valid].sum())
+    )
+
+    year, month_index = divmod(weighted_month_number, 12)
+    return pd.Timestamp(year=year, month=month_index + 1, day=1)
 
 
 @st.cache_data(show_spinner=False)
@@ -460,8 +516,25 @@ def run_two_way_sensitivity(
 
     base_tc_risk = weighted_avg_by_net_acres(slot_df, "tc_risk")
     base_ngl_yield = weighted_avg_by_net_acres(slot_df, "ngl_yield")
+    base_spud_month = weighted_avg_spud_month_by_net_acres(slot_df)
 
     def apply_value(sens_slot_df, sens_deal_inputs, variable, value):
+        if variable == "spud_date":
+            target_spud_month = pd.Timestamp(value).to_period("M").to_timestamp()
+            month_delta = (
+                (target_spud_month.year - base_spud_month.year) * 12
+                + target_spud_month.month
+                - base_spud_month.month
+            )
+            sens_slot_df["drilling_spud_month"] = (
+                pd.to_datetime(
+                    sens_slot_df["drilling_spud_month"],
+                    errors="coerce",
+                )
+                + pd.DateOffset(months=int(month_delta))
+            )
+            return
+
         value = float(value)
 
         if variable == "bid":
@@ -581,7 +654,21 @@ def run_individual_slot_returns(slot_df, deal_inputs):
 
 @st.cache_data(show_spinner=False)
 def run_bid_dc_sensitivity(slot_df, deal_inputs, base_dc, base_bid):
-    dc_values = build_sensitivity_range(base_dc, 50.0, 4)
+    if bool(deal_inputs.get("use_dc_pct_sensitivity", False)):
+        dc_values = build_percentage_sensitivity_range(
+            base_dc,
+            pct_step=0.05,
+            steps_each_way=4,
+            min_value=0.0,
+        )
+    else:
+        dc_values = build_sensitivity_range(
+            base_dc,
+            50.0,
+            4,
+            min_value=0.0,
+        )
+
     bid_values = build_sensitivity_range(
         base_bid,
         500.0,
@@ -749,6 +836,8 @@ def build_heatmap(
             return f"{v:.0%}"
         if fmt == "float2":
             return f"{v:.2f}"
+        if fmt == "date":
+            return pd.Timestamp(v).strftime("%b-%y")
         return str(v)
 
     x_vals = [format_axis_value(x, x_format) for x in heatmap_df.columns]
@@ -856,10 +945,17 @@ def build_heatmap(
             y_vals_raw = list(heatmap_df.index)
 
             def find_closest_index(values, target):
-                return min(
-                    range(len(values)),
-                    key=lambda i: abs(float(values[i]) - float(target)),
-                )
+                def distance(value):
+                    if isinstance(value, (pd.Timestamp, date)) or isinstance(
+                        target,
+                        (pd.Timestamp, date),
+                    ):
+                        return abs(
+                            (pd.Timestamp(value) - pd.Timestamp(target)).days
+                        )
+                    return abs(float(value) - float(target))
+
+                return min(range(len(values)), key=lambda i: distance(values[i]))
 
             x_idx = find_closest_index(x_vals_raw, base_x)
             y_idx = find_closest_index(y_vals_raw, base_y)
@@ -2357,6 +2453,7 @@ def build_email_html(
     irr_heatmap,
     irr_tcrisk_bid_heatmap,
     irr_ngl_yield_bid_heatmap,
+    irr_spud_tcrisk_heatmap,
     cum_fcf_chart,
     prod_chart_stacked,
     scenario_scatter_chart,
@@ -2445,6 +2542,13 @@ def build_email_html(
                 )}
             </td>
             <td style="vertical-align:top; padding:0 8px 0 8px;">
+                {html_img_from_fig(
+                    irr_spud_tcrisk_heatmap,
+                    width=1100,
+                    height=450,
+                    title="Spud Date vs. TC Risk IRR",
+                    max_width_px=760,
+                )}
             </td>
         </tr>
     </table>
@@ -2661,6 +2765,21 @@ st.sidebar.caption(
     + ("TC Risk" if use_tc_risk_as_main_sensitivity else "$/Acre Bid")
 )
 
+use_dc_pct_sensitivity = st.sidebar.toggle(
+    "Use 5% D&C Sensitivity Steps",
+    value=False,
+    help=(
+        "Off = D&C sensitivity changes in $50/ft increments. "
+        "On = D&C sensitivity changes in 5% increments around the base D&C. "
+        "With nine points, this covers 80% to 120% of the base D&C."
+    ),
+)
+
+st.sidebar.caption(
+    "D&C sensitivity steps: "
+    + ("5% of base D&C" if use_dc_pct_sensitivity else "$50/ft")
+)
+
 st.sidebar.subheader("Timing")
 effective_date = st.sidebar.date_input("Effective Date", value=next_month_start())
 
@@ -2848,6 +2967,7 @@ deal_inputs = {
     "use_bid_override": use_bid_override,
     "bid_override": bid_override,
     "use_tc_risk_as_main_sensitivity": use_tc_risk_as_main_sensitivity,
+    "use_dc_pct_sensitivity": use_dc_pct_sensitivity,
     "use_sev_tax_pct": use_sev_tax_pct,
     "oil_sev_tax": oil_sev_tax,
     "gas_sev_tax": gas_sev_tax,
@@ -3259,6 +3379,7 @@ if (
     deal_inputs["use_tc_risk_as_main_sensitivity"] = (
         use_tc_risk_as_main_sensitivity
     )
+    deal_inputs["use_dc_pct_sensitivity"] = use_dc_pct_sensitivity
 
     deal_display_df = deal_audit_df[[col for col in DEAL_DISPLAY_COLS if col in deal_audit_df.columns]].copy()
     slot_display_df = slot_audit_df[[col for col in SLOT_DISPLAY_COLS if col in slot_audit_df.columns]].copy()
@@ -3367,7 +3488,21 @@ if (
             max(0.0, base_tc_risk + 0.05 * i)
             for i in range(-4, 5)
         ]
-        dc_values = build_sensitivity_range(base_dc, 50.0, 4)
+        if bool(deal_inputs.get("use_dc_pct_sensitivity", False)):
+            dc_values = build_percentage_sensitivity_range(
+                base_dc,
+                pct_step=0.05,
+                steps_each_way=4,
+                min_value=0.0,
+            )
+        else:
+            dc_values = build_sensitivity_range(
+                base_dc,
+                50.0,
+                4,
+                min_value=0.0,
+            )
+
         oil_values = build_sensitivity_range(
             float(deal_inputs["oil_price"]),
             5.0,
@@ -3380,6 +3515,11 @@ if (
         )
         ngl_yield_values = [
             max(0.0, base_ngl_yield + 0.50 * i)
+            for i in range(-4, 5)
+        ]
+        base_spud_month = weighted_avg_spud_month_by_net_acres(slot_df)
+        spud_date_values = [
+            base_spud_month + pd.DateOffset(months=3 * i)
             for i in range(-4, 5)
         ]
 
@@ -3577,6 +3717,39 @@ if (
             base_y=main_base,
         )
 
+        irr_spud_tcrisk_df, moic_spud_tcrisk_df = run_two_way_sensitivity(
+            slot_df=slot_df,
+            deal_inputs=deal_inputs,
+            x_values=spud_date_values,
+            x_variable="spud_date",
+            y_values=tc_risk_values,
+            y_variable="tc_risk",
+        )
+
+        irr_spud_tcrisk_heatmap = build_heatmap(
+            irr_spud_tcrisk_df,
+            "IRR Sensitivity",
+            metric="irr",
+            x_title="Spud Date",
+            y_title="TC Risk",
+            x_format="date",
+            y_format="percent",
+            base_x=base_spud_month,
+            base_y=base_tc_risk,
+        )
+
+        moic_spud_tcrisk_heatmap = build_heatmap(
+            moic_spud_tcrisk_df,
+            "MOIC Sensitivity",
+            metric="moic",
+            x_title="Spud Date",
+            y_title="TC Risk",
+            x_format="date",
+            y_format="percent",
+            base_x=base_spud_month,
+            base_y=base_tc_risk,
+        )
+
         with st.expander(
             f"D&C Costs ($/ft) vs. {main_title} Sensitivity",
             expanded=True,
@@ -3636,6 +3809,29 @@ if (
             with col2:
                 st.markdown("### MOIC Sensitivity")
                 st.plotly_chart(moic_tcrisk_bid_heatmap, use_container_width=True)
+
+        with st.expander(
+            "Spud Date vs. TC Risk Sensitivity",
+            expanded=False,
+        ):
+            st.caption(
+                "Spud timing shifts in 3-month increments from 12 months earlier "
+                "to 12 months later. For multi-slot deals, every slot shifts by "
+                "the same amount so relative timing is preserved."
+            )
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("### IRR Sensitivity")
+                st.plotly_chart(
+                    irr_spud_tcrisk_heatmap,
+                    use_container_width=True,
+                )
+            with col2:
+                st.markdown("### MOIC Sensitivity")
+                st.plotly_chart(
+                    moic_spud_tcrisk_heatmap,
+                    use_container_width=True,
+                )
 
     st.subheader("Outputs")
     
@@ -3781,6 +3977,7 @@ if (
             irr_heatmap=irr_heatmap,
             irr_tcrisk_bid_heatmap=irr_tcrisk_bid_heatmap,
             irr_ngl_yield_bid_heatmap=irr_ngl_yield_bid_heatmap,
+            irr_spud_tcrisk_heatmap=irr_spud_tcrisk_heatmap,
             cum_fcf_chart=cum_fcf_chart_for_email,
             prod_chart_stacked=prod_chart_stacked,
             scenario_scatter_chart=scenario_scatter_chart,
