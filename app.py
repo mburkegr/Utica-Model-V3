@@ -54,6 +54,9 @@ def pretty_column_name(col):
         "promote_effective_date": "Reversion Effective Date",
         "slot_total_cash_flow": "Total Cash Flow",
         "cum_total_cf": "Cumulative Total Cash Flow",
+        "economic_limit_reached": "Economic Limit Reached",
+        "well_shut_in": "Well Shut In",
+        "pre_shut_in_operating_cf": "Pre-Shut-In Operating CF",
     }
     return name_map.get(col, col.replace("_", " ").title())
 
@@ -3333,6 +3336,9 @@ SLOT_DISPLAY_COLS = [
     "slot_id",
     "tc_name",
     "date",
+    "economic_limit_reached",
+    "well_shut_in",
+    "pre_shut_in_operating_cf",
     "dale_promote",
     "pre_promote_working_interest",
     "promote_wi_transferred",
