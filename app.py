@@ -42,16 +42,16 @@ def pretty_column_name(col):
         "slot_operating_profit": "Operating Profit",
         "slot_capex": "Capex",
         "slot_asset_purchase": "Acquisition",
-        "dale_promote": "WI Promote Eligible",
-        "pre_promote_working_interest": "Pre-Promote WI",
+        "dale_promote": "WI Reversion Eligible",
+        "pre_promote_working_interest": "Pre-Reversion WI",
         "promote_wi_transferred": "WI Transferred",
-        "post_promote_working_interest": "Post-Promote WI",
+        "post_promote_working_interest": "Post-Reversion WI",
         "effective_working_interest": "Effective WI",
-        "promote_running_multiple": "Promote Multiple",
-        "promote_hurdle_reached": "Promote Hurdle Reached",
-        "promote_active": "Promote Active",
-        "promote_hurdle_date": "Promote Hurdle Date",
-        "promote_effective_date": "Promote Effective Date",
+        "promote_running_multiple": "Reversion Multiple",
+        "promote_hurdle_reached": "Reversion Hurdle Reached",
+        "promote_active": "Reversion Active",
+        "promote_hurdle_date": "Reversion Hurdle Date",
+        "promote_effective_date": "Reversion Effective Date",
         "slot_total_cash_flow": "Total Cash Flow",
         "cum_total_cf": "Cumulative Total Cash Flow",
     }
@@ -1422,7 +1422,7 @@ def build_tc_assumptions_output_display_table(slot_df, deal_inputs, slot_returns
     add_data("Flowback Delay", {k: fmt_num(v["flowback_delay"], decimals=0) for k, v in slot_map.items()})
     add_data("Lateral Length (ft)", {k: fmt_num(v["lateral_length"], decimals=0) for k, v in slot_map.items()})
     add_data(
-        "WI Promote Eligible",
+        "WI Reversion Eligible",
         {k: ("Yes" if bool(v.get("dale_promote", False)) else "No") for k, v in slot_map.items()},
     )
 
@@ -2609,21 +2609,21 @@ with st.sidebar.expander("NGL Component Prices", expanded=False):
     price_butane = st.number_input("Butane Price", value=0.7825, step=0.01, format="%.5f")
     price_pentanes = st.number_input("Pentanes Price", value=1.22125, step=0.01, format="%.5f")
 
-st.sidebar.subheader("Dale WI Promote")
+st.sidebar.subheader("WI Reversion")
 
 st.sidebar.caption(
-    "For selected slots, the promote transfers a percentage of our then-current "
+    "For selected slots, the reversion transfers a percentage of our then-current "
     "working interest after cumulative distributions reach the selected multiple "
     "of acquisition cost plus funded D&C."
 )
 
 dale_promote_override = st.sidebar.checkbox(
-    "Dale Promote Override - Apply to All Slots",
+    "WI Reversion Override - Apply to All Slots",
     value=False,
 )
 
 promote_wi_reversion_pct = st.sidebar.number_input(
-    "WI Given Up at Promote (%)",
+    "WI Given Up at Reversion (%)",
     min_value=0.0,
     max_value=100.0,
     value=6.25,
@@ -2636,14 +2636,14 @@ promote_wi_reversion_pct = st.sidebar.number_input(
 )
 
 promote_multiple = st.sidebar.number_input(
-    "Promote Investment Multiple",
+    "Reversion Investment Multiple",
     min_value=0.01,
     value=1.00,
     step=0.05,
     format="%.2f",
     help=(
         "Cumulative positive operating distributions divided by cumulative "
-        "acquisition cost plus funded D&C for promote-eligible slots."
+        "acquisition cost plus funded D&C for reversion-eligible slots."
     ),
 )
 
@@ -2770,10 +2770,10 @@ with st.form("slot_inputs_form"):
             default=True,
         ),
         "dale_promote": st.column_config.CheckboxColumn(
-            "Dale WI Promote",
+            "WI Reversion",
             help=(
                 "Pool this slot's acquisition, funded D&C, and positive operating "
-                "distributions in the promote test. After vesting, the selected "
+                "distributions in the reversion test. After the hurdle is reached, the selected "
                 "portion of our then-current WI transfers permanently."
             ),
             default=False,
@@ -3099,13 +3099,13 @@ if (
                 deal_inputs.get("promote_wi_reversion_pct", 0.0)
             )
             st.info(
-                f"Dale WI promote becomes effective {promote_effective_date:%m/%d/%Y}: "
+                f"WI reversion becomes effective {promote_effective_date:%m/%d/%Y}: "
                 f"{transferred_pct:.2f}% of our then-current WI transfers after the "
                 f"{float(deal_inputs.get('promote_multiple', 0.0)):.2f}x hurdle."
             )
         else:
             st.info(
-                "Dale WI promote is enabled but does not reach its investment "
+                "WI reversion is enabled but does not reach its investment "
                 "multiple during the modeled period."
             )
 
