@@ -463,8 +463,8 @@ def run_individual_slot_returns(slot_df, deal_inputs):
 
 @st.cache_data(show_spinner=False)
 def run_bid_dc_sensitivity(slot_df, deal_inputs, base_dc, base_bid):
-    dc_values = build_sensitivity_range(base_dc, 50.0, 3)
-    bid_values = build_sensitivity_range(base_bid, 500.0, 3)
+    dc_values = build_sensitivity_range(base_dc, 50.0, 4)
+    bid_values = build_sensitivity_range(base_bid, 500.0, 4)
 
     irr_table = pd.DataFrame(index=bid_values, columns=dc_values)
     moic_table = pd.DataFrame(index=bid_values, columns=dc_values)
@@ -3158,21 +3158,29 @@ if (
             base_y=base_bid,
         )
     
-        bid_values = build_sensitivity_range(base_bid, 500.0, 3)
+        bid_values = build_sensitivity_range(base_bid, 500.0, 4)
         base_tc_risk = weighted_avg_by_net_acres(slot_df, "tc_risk")
 
         tc_risk_values = [
             max(0.0, base_tc_risk + 0.05 * i)
-            for i in range(-3, 4)
+            for i in range(-4, 5)
         ]
-        oil_values = [50, 55, 60, 65, 70]
-        gas_values = [3.25, 3.50, 3.75, 4.00, 4.25]
+        oil_values = build_sensitivity_range(
+            float(deal_inputs["oil_price"]),
+            5.0,
+            4,
+        )
+        gas_values = build_sensitivity_range(
+            float(deal_inputs["gas_price"]),
+            0.25,
+            4,
+        )
         
         base_ngl_yield = weighted_avg_by_net_acres(slot_df, "ngl_yield")
         
         ngl_yield_values = [
             max(0.0, base_ngl_yield + 0.50 * i)
-            for i in range(-3, 4)
+            for i in range(-4, 5)
         ]
     
         irr_oil_bid_df, moic_oil_bid_df = run_oil_bid_sensitivity(
