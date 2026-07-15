@@ -188,6 +188,10 @@ def run_single_slot_economics(slot, type_curve_library, global_assumptions, slot
 
     oil_price = float(global_assumptions["oil_price"])
     gas_price = float(global_assumptions["gas_price"])
+    use_sev_tax_pct = bool(
+        global_assumptions.get("use_sev_tax_pct", False)
+    )
+    
     oil_sev_tax = float(global_assumptions["oil_sev_tax"])
     gas_sev_tax = float(global_assumptions["gas_sev_tax"])
     ad_val_tax = float(global_assumptions["ad_val_tax"])
@@ -258,12 +262,34 @@ def run_single_slot_economics(slot, type_curve_library, global_assumptions, slot
     tc_df["fixed_loe_monthly"] = fixed_loe_monthly
     tc_df["total_loe"] = tc_df["variable_loe"] + tc_df["fixed_loe_monthly"]
 
-    tc_df["ad_valorem_tax"] = -(ad_val_tax * tc_df["total_revenue"])
-    tc_df["oil_severance_tax"] = -(oil_sev_tax * tc_df["equity_oil_production"])
-    tc_df["gas_severance_tax"] = -(
-        gas_sev_tax
-        * (tc_df["equity_gas_production"] / (1.0 - float(slot_ngl["shrink"])))
+    tc_df["ad_valorem_tax"] = -(
+        ad_val_tax * tc_df["total_revenue"]
     )
+    
+    if use_sev_tax_pct:
+        # Net product revenue equals net production multiplied
+        # by the realized product price.
+        tc_df["oil_severance_tax"] = -(
+            oil_sev_tax * tc_df["oil_revenue"]
+        )
+    
+        tc_df["gas_severance_tax"] = -(
+            gas_sev_tax * tc_df["gas_revenue"]
+        )
+    
+    else:
+        # Preserve the existing fixed-rate methodology.
+        tc_df["oil_severance_tax"] = -(
+            oil_sev_tax * tc_df["equity_oil_production"]
+        )
+    
+        tc_df["gas_severance_tax"] = -(
+            gas_sev_tax
+            * (
+                tc_df["equity_gas_production"]
+                / (1.0 - float(slot_ngl["shrink"]))
+            )
+        )
 
     tc_df["tax"] = (
         tc_df["ad_valorem_tax"]
@@ -886,11 +912,29 @@ def prepare_deal_settings(deal_inputs):
 
 
 def prepare_global_assumptions(deal_inputs):
+    use_sev_tax_pct = bool(
+        deal_inputs.get("use_sev_tax_pct", False)
+    )
+
     return {
         "oil_price": float(deal_inputs["oil_price"]),
         "gas_price": float(deal_inputs["gas_price"]),
-        "oil_sev_tax": float(deal_inputs["oil_sev_tax"]),
-        "gas_sev_tax": float(deal_inputs["gas_sev_tax"]),
+        "use_sev_tax_pct": use_sev_tax_pct,
+
+        # In percentage mode, the app accepts whole percentages:
+        # 5 = 5%, so convert it to 0.05 for the calculation.
+        "oil_sev_tax": (
+            float(deal_inputs["oil_sev_tax"]) / 100.0
+            if use_sev_tax_pct
+            else float(deal_inputs["oil_sev_tax"])
+        ),
+
+        "gas_sev_tax": (
+            float(deal_inputs["gas_sev_tax"]) / 100.0
+            if use_sev_tax_pct
+            else float(deal_inputs["gas_sev_tax"])
+        ),
+
         "ad_val_tax": float(deal_inputs["ad_val_tax"]),
         "ethane_rec": 1 if bool(deal_inputs["ethane_rec"]) else 0,
         "content_percentages": {
