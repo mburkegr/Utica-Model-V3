@@ -590,10 +590,33 @@ def build_slot_financials(
 # Financial calendar alignment
 # -----------------------------
 def align_to_financial_calendar(slot_df, effective_date, months=360):
-    effective_date = pd.to_datetime(effective_date)
+    effective_date = (
+        pd.to_datetime(effective_date).to_period("M").to_timestamp()
+    )
+
+    slot_df = slot_df.copy()
+    slot_df["date"] = (
+        pd.to_datetime(slot_df["date"], errors="coerce")
+        .dt.to_period("M")
+        .dt.to_timestamp()
+    )
+
+    slot_start = slot_df["date"].min()
+    calendar_start = (
+        min(effective_date, slot_start)
+        if pd.notnull(slot_start)
+        else effective_date
+    )
+    calendar_end = effective_date + pd.DateOffset(months=months - 1)
 
     calendar = pd.DataFrame(
-        {"date": pd.date_range(start=effective_date, periods=months, freq="MS")}
+        {
+            "date": pd.date_range(
+                start=calendar_start,
+                end=calendar_end,
+                freq="MS",
+            )
+        }
     )
 
     df = calendar.merge(slot_df, on="date", how="left")
