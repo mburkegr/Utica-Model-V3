@@ -2452,9 +2452,68 @@ bid_override = st.sidebar.number_input(
 )
 
 st.sidebar.subheader("Taxes")
-oil_sev_tax = st.sidebar.number_input("Oil Severance Tax ($/bbl)", value=0.10, step=0.01, format="%.3f")
-gas_sev_tax = st.sidebar.number_input("Gas Severance Tax ($/mcf)", value=0.025, step=0.005, format="%.3f")
-ad_val_tax = st.sidebar.number_input("Ad Valorem Tax (% of Net Revenue)", value=0.025, step=0.005, format="%.3f")
+
+use_sev_tax_pct = st.sidebar.toggle(
+    "Severance Tax as % of Net Revenue",
+    value=False,
+    help=(
+        "Off = fixed $/bbl for oil and $/mcf for gas. "
+        "On = percentage of net oil revenue and net gas revenue."
+    ),
+)
+
+oil_tax_col, gas_tax_col = st.sidebar.columns(2)
+
+if use_sev_tax_pct:
+    with oil_tax_col:
+        oil_sev_tax = st.number_input(
+            "Oil Sev. Tax (%)",
+            min_value=0.0,
+            value=0.0,
+            step=0.25,
+            format="%.3f",
+            key="oil_sev_tax_pct_input",
+            help="Enter 5 for 5% of net oil revenue.",
+        )
+
+    with gas_tax_col:
+        gas_sev_tax = st.number_input(
+            "Gas Sev. Tax (%)",
+            min_value=0.0,
+            value=0.0,
+            step=0.25,
+            format="%.3f",
+            key="gas_sev_tax_pct_input",
+            help="Enter 5 for 5% of net gas revenue.",
+        )
+
+else:
+    with oil_tax_col:
+        oil_sev_tax = st.number_input(
+            "Oil Sev. Tax ($/bbl)",
+            min_value=0.0,
+            value=0.10,
+            step=0.01,
+            format="%.3f",
+            key="oil_sev_tax_fixed_input",
+        )
+
+    with gas_tax_col:
+        gas_sev_tax = st.number_input(
+            "Gas Sev. Tax ($/mcf)",
+            min_value=0.0,
+            value=0.025,
+            step=0.005,
+            format="%.3f",
+            key="gas_sev_tax_fixed_input",
+        )
+
+ad_val_tax = st.sidebar.number_input(
+    "Ad Valorem Tax (% of Net Revenue)",
+    value=0.025,
+    step=0.005,
+    format="%.3f",
+)
 
 st.sidebar.subheader("Ethane / NGL")
 ethane_rec = st.sidebar.checkbox("Recover Ethane", value=False)
@@ -2535,6 +2594,7 @@ deal_inputs = {
     "dc_override": dc_override,
     "use_bid_override": use_bid_override,
     "bid_override": bid_override,
+    "use_sev_tax_pct": use_sev_tax_pct,
     "oil_sev_tax": oil_sev_tax,
     "gas_sev_tax": gas_sev_tax,
     "ad_val_tax": ad_val_tax,
