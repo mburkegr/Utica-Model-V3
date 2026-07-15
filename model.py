@@ -385,15 +385,52 @@ def run_single_slot_economics(slot, type_curve_library, global_assumptions, slot
     df["capex"] = 0.0
     df.loc[df["period"] == 0, "capex"] = -(dc_costs * lateral_length)
 
-    df["operating_cf"] = df["net_revenue"] + df["total_loe"] + df["tax"]
-
-    df["operating_cf_shut_in"] = np.where(
-        (df["period"] > 0) & (df["operating_cf"] < 0),
-        0.0,
-        df["operating_cf"],
+    # Determine the economic limit using the unmodified operating cash flow.
+    # Once a producing well has a negative operating month, it is permanently
+    # shut in beginning in that month. This prevents late-life fixed LOE from
+    # creating a second cash-flow sign change and unstable/multiple XIRRs.
+    df["pre_shut_in_operating_cf"] = (
+        df["net_revenue"] + df["total_loe"] + df["tax"]
     )
 
-    df["cash_flow"] = df["operating_cf_shut_in"] + df["capex"]
+    df["economic_limit_reached"] = (
+        df["period"].gt(0)
+        & df["pre_shut_in_operating_cf"].lt(0.0)
+    )
+    df["well_shut_in"] = df["economic_limit_reached"].cummax()
+
+    shut_in_cols = [
+        "base_oil_scaled",
+        "base_gas_scaled",
+        "gross_oil_production",
+        "gross_gas_production",
+        "gross_ngl_production",
+        "monthly_production_boe",
+        "oil_royalty_volumes",
+        "gas_royalty_volumes",
+        "ngl_royalty_volumes",
+        "equity_oil_production",
+        "equity_gas_production",
+        "equity_ngl_production",
+        "oil_revenue",
+        "gas_revenue",
+        "ngl_revenue",
+        "total_revenue",
+        "net_revenue",
+        "opex",
+        "variable_loe",
+        "fixed_loe_monthly",
+        "total_loe",
+        "tax",
+    ]
+    existing_shut_in_cols = [c for c in shut_in_cols if c in df.columns]
+    df.loc[df["well_shut_in"], existing_shut_in_cols] = 0.0
+
+    # Recalculate the final operating cash flow after applying the permanent
+    # shut-in. Keep operating_cf_shut_in for backward-compatible outputs.
+    df["operating_cf"] = df["net_revenue"] + df["total_loe"] + df["tax"]
+    df["operating_cf_shut_in"] = df["operating_cf"]
+    df["cash_flow"] = df["operating_cf"] + df["capex"]
 
     return df
 
@@ -1215,6 +1252,9 @@ def build_slot_audit_view(all_slots_df):
         "working_interest",
         "dale_promote",
         "carry_reversion_active",
+        "economic_limit_reached",
+        "well_shut_in",
+        "pre_shut_in_operating_cf",
         "pre_promote_working_interest",
         "promote_wi_transferred",
         "post_promote_working_interest",
