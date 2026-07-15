@@ -42,7 +42,16 @@ def pretty_column_name(col):
         "slot_operating_profit": "Operating Profit",
         "slot_capex": "Capex",
         "slot_asset_purchase": "Acquisition",
-        "slot_promote": "Promote",
+        "dale_promote": "WI Promote Eligible",
+        "pre_promote_working_interest": "Pre-Promote WI",
+        "promote_wi_transferred": "WI Transferred",
+        "post_promote_working_interest": "Post-Promote WI",
+        "effective_working_interest": "Effective WI",
+        "promote_running_multiple": "Promote Multiple",
+        "promote_hurdle_reached": "Promote Hurdle Reached",
+        "promote_active": "Promote Active",
+        "promote_hurdle_date": "Promote Hurdle Date",
+        "promote_effective_date": "Promote Effective Date",
         "slot_total_cash_flow": "Total Cash Flow",
         "cum_total_cf": "Cumulative Total Cash Flow",
     }
@@ -117,9 +126,39 @@ def format_accounting_production(
 def format_display_df(df):
     display_df = df.copy()
 
+    percent_cols = {
+        "working_interest",
+        "pre_promote_working_interest",
+        "promote_wi_transferred",
+        "post_promote_working_interest",
+        "effective_working_interest",
+    }
+    multiple_cols = {"promote_running_multiple"}
+
     for col in display_df.columns:
         if pd.api.types.is_datetime64_any_dtype(display_df[col]):
             display_df[col] = display_df[col].dt.strftime("%Y-%m-%d")
+        elif pd.api.types.is_bool_dtype(display_df[col]):
+            display_df[col] = display_df[col].map(
+                lambda x: "Yes" if bool(x) else "No"
+            )
+        elif col in percent_cols:
+            display_df[col] = display_df[col].map(
+                lambda x: format_accounting_percent(
+                    x,
+                    decimals=2,
+                    zero_as_dash=False,
+                )
+            )
+        elif col in multiple_cols:
+            display_df[col] = display_df[col].map(
+                lambda x: format_accounting_number(
+                    x,
+                    decimals=2,
+                    suffix="x",
+                    zero_as_dash=False,
+                )
+            )
         elif pd.api.types.is_numeric_dtype(display_df[col]):
             display_df[col] = display_df[col].map(
                 lambda x: format_accounting_number(x, decimals=1)
@@ -761,22 +800,43 @@ def build_quarterly_output_table(deal_df, all_slots_df, slot_df, deal_inputs):
     slot_metrics["spud_quarter"] = "Q" + slot_metrics["drilling_spud_month"].dt.quarter.astype(str) + " " + slot_metrics["drilling_spud_month"].dt.strftime("%y")
     slot_metrics["spud_year"] = slot_metrics["drilling_spud_month"].dt.year.astype(str)
 
+    # Gross wells do not change with a WI promote. Net wells spud should use
+    # the actual effective ownership on each slot's spud date, so wells drilled
+    # after the promote vests reflect the reduced WI.
+    slot_metrics["gross_wells_spud"] = slot_metrics["gross_wells"]
+
+    spud_effective_wi = (
+        slots[["slot_id", "date", "effective_net_wells"]]
+        .merge(
+            slot_inputs[["slot_id", "drilling_spud_month"]],
+            on="slot_id",
+            how="inner",
+        )
+    )
+    spud_effective_wi = spud_effective_wi[
+        spud_effective_wi["date"] == spud_effective_wi["drilling_spud_month"]
+    ]
+    net_wells_by_slot = (
+        spud_effective_wi.groupby("slot_id")["effective_net_wells"].first()
+    )
+
+    # Fallback for any unmatched row retains the original slot calculation.
     unit_acres_final = np.where(
         slot_metrics["use_calc_unit_acres"].fillna(False),
         slot_metrics["gross_wells"] * slot_metrics["lateral_length"] / 50.0,
         slot_metrics["unit_acres"],
     )
-
-    working_interest = np.where(
+    fallback_working_interest = np.where(
         unit_acres_final != 0,
         (slot_metrics["net_acres"] / unit_acres_final) * slot_metrics["pct_unitized"],
         0.0,
     )
+    fallback_net_wells = fallback_working_interest * slot_metrics["gross_wells"]
 
-    net_wells_calc = working_interest * slot_metrics["gross_wells"]
-
-    slot_metrics["gross_wells_spud"] = slot_metrics["gross_wells"]
-    slot_metrics["net_wells_spud"] = net_wells_calc
+    slot_metrics["net_wells_spud"] = (
+        slot_metrics["slot_id"].map(net_wells_by_slot)
+        .fillna(pd.Series(fallback_net_wells, index=slot_metrics.index))
+    )
 
     q_spud = slot_metrics.groupby("spud_quarter")[["gross_wells_spud", "net_wells_spud"]].sum().reindex(quarter_order).fillna(0.0)
     y_spud = slot_metrics.groupby("spud_year")[["gross_wells_spud", "net_wells_spud"]].sum().reindex(year_order).fillna(0.0)
@@ -808,9 +868,7 @@ def build_quarterly_output_table(deal_df, all_slots_df, slot_df, deal_inputs):
 
         taxes_pos = -df["slot_tax"]
         loe_pos = -df["slot_loe"]
-        promote_pos = -df["slot_promote"]
-
-        total_opex = taxes_pos + loe_pos + promote_pos
+        total_opex = taxes_pos + loe_pos
         ebitda = df["slot_total_revenue"] - total_opex
 
         d_and_c = -df["slot_capex"]
@@ -834,11 +892,9 @@ def build_quarterly_output_table(deal_df, all_slots_df, slot_df, deal_inputs):
         out.loc["Revenues - Total"] = df["slot_total_revenue"] / 1000.0
         out.loc["Operating Expenses - Taxes"] = taxes_pos / 1000.0
         out.loc["Operating Expenses - LOE"] = loe_pos / 1000.0
-        out.loc["Operating Expenses - Dale Promote"] = promote_pos / 1000.0
         out.loc["Operating Expenses - Total Opex"] = total_opex / 1000.0
         out.loc["Taxes / Mcfe"] = safe_div(taxes_pos, total_mcfe)
         out.loc["LOE / Mcfe"] = safe_div(loe_pos, total_mcfe)
-        out.loc["Promote / Mcfe"] = safe_div(promote_pos, total_mcfe)
         out.loc["EBITDA"] = ebitda / 1000.0
         out.loc["Capital Expenditures - D&C"] = d_and_c / 1000.0
         out.loc["Capital Expenditures - Acquisition"] = acquisition / 1000.0
@@ -874,11 +930,9 @@ def build_quarterly_output_table(deal_df, all_slots_df, slot_df, deal_inputs):
         "Revenues - Total",
         "Operating Expenses - Taxes",
         "Operating Expenses - LOE",
-        "Operating Expenses - Dale Promote",
         "Operating Expenses - Total Opex",
         "Taxes / Mcfe",
         "LOE / Mcfe",
-        "Promote / Mcfe",
         "EBITDA",
         "Capital Expenditures - D&C",
         "Capital Expenditures - Acquisition",
@@ -900,7 +954,7 @@ def build_quarterly_output_display_table(df):
     data_cols = list(df.columns)
 
     pct_rows = {"Realized Pricing - NGL (% of WTI)"}
-    dollar_per_unit_rows = {"Taxes / Mcfe", "LOE / Mcfe", "Promote / Mcfe"}
+    dollar_per_unit_rows = {"Taxes / Mcfe", "LOE / Mcfe"}
     price_rows = {
         "Assumed Index Pricing - Crude Oil",
         "Assumed Index Pricing - Natural Gas",
@@ -999,14 +1053,12 @@ def build_quarterly_output_display_table(df):
     add_section("Operating Expenses")
     add_data("Taxes", "Operating Expenses - Taxes", indent=True)
     add_data("LOE", "Operating Expenses - LOE", indent=True)
-    add_data("Dale Promote", "Operating Expenses - Dale Promote", indent=True)
     add_data("Total", "Operating Expenses - Total Opex")
 
     add_gap()
 
     add_data("Taxes / Mcfe", "Taxes / Mcfe", style="italic")
     add_data("LOE / Mcfe", "LOE / Mcfe", style="italic")
-    add_data("Promote / Mcfe", "Promote / Mcfe", style="italic")
 
     add_gap()
 
@@ -1369,6 +1421,10 @@ def build_tc_assumptions_output_display_table(slot_df, deal_inputs, slot_returns
     add_data("Spud Month", {k: fmt_date(v["drilling_spud_month"]) for k, v in slot_map.items()})
     add_data("Flowback Delay", {k: fmt_num(v["flowback_delay"], decimals=0) for k, v in slot_map.items()})
     add_data("Lateral Length (ft)", {k: fmt_num(v["lateral_length"], decimals=0) for k, v in slot_map.items()})
+    add_data(
+        "WI Promote Eligible",
+        {k: ("Yes" if bool(v.get("dale_promote", False)) else "No") for k, v in slot_map.items()},
+    )
 
     add_gap()
 
@@ -2553,35 +2609,42 @@ with st.sidebar.expander("NGL Component Prices", expanded=False):
     price_butane = st.number_input("Butane Price", value=0.7825, step=0.01, format="%.5f")
     price_pentanes = st.number_input("Pentanes Price", value=1.22125, step=0.01, format="%.5f")
 
-st.sidebar.subheader("Dale Promote")
+st.sidebar.subheader("Dale WI Promote")
+
+st.sidebar.caption(
+    "For selected slots, the promote transfers a percentage of our then-current "
+    "working interest after cumulative distributions reach the selected multiple "
+    "of acquisition cost plus funded D&C."
+)
 
 dale_promote_override = st.sidebar.checkbox(
     "Dale Promote Override - Apply to All Slots",
     value=False,
 )
 
-promote_rate = st.sidebar.number_input(
-    "Promote",
-    value=0.0625,
-    step=0.01,
-    format="%.4f",
-    disabled=False,
+promote_wi_reversion_pct = st.sidebar.number_input(
+    "WI Given Up at Promote (%)",
+    min_value=0.0,
+    max_value=100.0,
+    value=6.25,
+    step=0.25,
+    format="%.2f",
+    help=(
+        "Enter 12.5 to transfer 12.5% of our then-current WI. "
+        "The transfer permanently begins the month after the hurdle is reached."
+    ),
 )
 
 promote_multiple = st.sidebar.number_input(
-    "Promote Multiple",
+    "Promote Investment Multiple",
+    min_value=0.01,
     value=1.00,
     step=0.05,
     format="%.2f",
-    disabled=False,
-)
-
-promote_irr_threshold = st.sidebar.number_input(
-    "Promote IRR Threshold",
-    value=0.00,
-    step=0.01,
-    format="%.4f",
-    disabled=False,
+    help=(
+        "Cumulative positive operating distributions divided by cumulative "
+        "acquisition cost plus funded D&C for promote-eligible slots."
+    ),
 )
 
 deal_inputs = {
@@ -2626,9 +2689,8 @@ deal_inputs = {
     "price_pentanes": price_pentanes,
     "dale_promote_override": dale_promote_override,
     "promote_enabled": False,  # set right before model run based on selected slots
-    "promote_rate": promote_rate,
+    "promote_wi_reversion_pct": promote_wi_reversion_pct,
     "promote_multiple": promote_multiple,
-    "promote_irr_threshold": promote_irr_threshold,
 }
 
 
@@ -2708,8 +2770,12 @@ with st.form("slot_inputs_form"):
             default=True,
         ),
         "dale_promote": st.column_config.CheckboxColumn(
-            "Dale Promote",
-            help="Include this slot in the Dale promote calculation.",
+            "Dale WI Promote",
+            help=(
+                "Pool this slot's acquisition, funded D&C, and positive operating "
+                "distributions in the promote test. After vesting, the selected "
+                "portion of our then-current WI transfers permanently."
+            ),
             default=False,
         ),
         "carry_enabled": st.column_config.CheckboxColumn(
@@ -2837,9 +2903,8 @@ if run_model_clicked:
         )
         
         if not run_deal_inputs["promote_enabled"]:
-            run_deal_inputs["promote_rate"] = 0.0
+            run_deal_inputs["promote_wi_reversion_pct"] = 0.0
             run_deal_inputs["promote_multiple"] = 0.0
-            run_deal_inputs["promote_irr_threshold"] = 0.0
         
         all_slots_df, deal_df, slot_audit_df, deal_audit_df, irr, moic = run_deal_model(
             model_slot_df,
@@ -2907,6 +2972,13 @@ if run_model_clicked:
 # -----------------------------
 DEAL_DISPLAY_COLS = [
     "date",
+    "promote_cumulative_investment",
+    "promote_cumulative_distributions",
+    "promote_running_multiple",
+    "promote_hurdle_reached",
+    "promote_active",
+    "promote_hurdle_date",
+    "promote_effective_date",
     "slot_net_oil_production",
     "slot_net_gas_production",
     "slot_net_ngl_production",
@@ -2919,7 +2991,6 @@ DEAL_DISPLAY_COLS = [
     "slot_operating_profit",
     "slot_capex",
     "slot_asset_purchase",
-    "slot_promote",
     "slot_total_cash_flow",
     "cum_total_cf",
 ]
@@ -2928,6 +2999,16 @@ SLOT_DISPLAY_COLS = [
     "slot_id",
     "tc_name",
     "date",
+    "dale_promote",
+    "pre_promote_working_interest",
+    "promote_wi_transferred",
+    "post_promote_working_interest",
+    "effective_working_interest",
+    "promote_running_multiple",
+    "promote_hurdle_reached",
+    "promote_active",
+    "promote_hurdle_date",
+    "promote_effective_date",
     "slot_net_oil_production",
     "slot_net_gas_production",
     "slot_net_ngl_production",
@@ -2940,7 +3021,6 @@ SLOT_DISPLAY_COLS = [
     "slot_operating_profit",
     "slot_capex",
     "slot_asset_purchase",
-    "slot_promote",
     "slot_total_cash_flow",
     "cum_total_cf",
 ]
@@ -3006,6 +3086,28 @@ if (
         st.metric("IRR", format_accounting_percent(irr, decimals=1, zero_as_dash=False) if irr is not None else "N/A")
     with col5:
         st.metric("MOIC", format_accounting_number(moic, decimals=2, suffix="x", zero_as_dash=False) if moic is not None else "N/A")
+
+    if bool(deal_inputs.get("promote_enabled", False)):
+        active_dates = deal_df.loc[
+            deal_df.get("promote_active", False).fillna(False),
+            "date",
+        ] if "promote_active" in deal_df.columns else pd.Series(dtype="datetime64[ns]")
+
+        if not active_dates.empty:
+            promote_effective_date = pd.to_datetime(active_dates.iloc[0])
+            transferred_pct = float(
+                deal_inputs.get("promote_wi_reversion_pct", 0.0)
+            )
+            st.info(
+                f"Dale WI promote becomes effective {promote_effective_date:%m/%d/%Y}: "
+                f"{transferred_pct:.2f}% of our then-current WI transfers after the "
+                f"{float(deal_inputs.get('promote_multiple', 0.0)):.2f}x hurdle."
+            )
+        else:
+            st.info(
+                "Dale WI promote is enabled but does not reach its investment "
+                "multiple during the modeled period."
+            )
 
     base_dc = (
         deal_inputs["dc_override"]
