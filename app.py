@@ -3519,10 +3519,12 @@ if (
             0.25,
             4,
         )
-        ngl_yield_values = [
-            max(0.0, base_ngl_yield + 0.50 * i)
-            for i in range(-4, 5)
-        ]
+        ngl_yield_values = build_sensitivity_range(
+            base_value=base_ngl_yield,
+            step=0.50,
+            steps_each_way=4,
+            min_value=0.0,
+        )
         base_spud_month = weighted_avg_spud_month_by_net_acres(slot_df)
         spud_date_values = [
             base_spud_month + pd.DateOffset(months=3 * i)
